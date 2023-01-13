@@ -11,7 +11,7 @@ trap 'kill $(jobs -p)' EXIT
 : "${DISTRO_DIR:=build/${DISTRO}}"
 
 : "${FORWARD_SSH_PORT:=2222}"
-: "${SSH_AUTHORIZED_KEYS:=}"
+
 KVM_ENABLED=0
 
 : "${CGROUP_VERSION=2}"
@@ -64,6 +64,10 @@ qemu-img create -f qcow2 -b rootfs.qcow2 -F qcow2 ${rootfs_diff} >/dev/null
 
 if [ "${KVM_ENABLED}" = "1" ]; then
     withSudo="do_sudo"
+fi
+
+if [ ! -f "${DISTRO_DIR}/ssh_key" ]; then
+    ssh-keygen -t ed25519 -f "${DISTRO_DIR}/ssh_key" -N ""
 fi
 
 (
