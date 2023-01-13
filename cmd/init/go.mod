@@ -6,7 +6,6 @@ require (
 	github.com/antonfisher/nested-logrus-formatter v1.3.1
 	github.com/insomniacslk/dhcp v0.0.0-20221215072855-de60144f33f8
 	github.com/sirupsen/logrus v1.9.0
-	github.com/tarm/serial v0.0.0-20180830185346-98f6abe2eb07
 	github.com/vishvananda/netlink v1.1.0
 	golang.org/x/sys v0.4.0
 )
