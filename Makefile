@@ -13,6 +13,7 @@ run: $(OUTDIR)/img $(OUTDIR)/$(DISTRO)/vmlinuz
 		-e DISTRO_DIR=distro \
 		-e NO_KVM \
 		-e CGROUP_VERSION \
+		-e VM_CPUS \
 		-w /opt/qemu \
 		--rm \
 		-P \
