@@ -2,8 +2,7 @@ ARG DISTRO=jammy
 
 FROM ubuntu:22.04 AS rootfs-jammy
 ARG DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y linux-image-kvm docker.io iptables ssh ntp isc-dhcp-client
-
+RUN apt-get update && apt-get install -y linux-image-kvm docker.io iptables ssh ntp
 
 FROM golang:1.19 AS init
 WORKDIR /opt/init
