@@ -14,7 +14,8 @@ require (
 	github.com/josharian/native v1.0.1-0.20221213033349-c1e37c09b531 // indirect
 	github.com/mdlayher/ethernet v0.0.0-20190606142754-0394541c37b7 // indirect
 	github.com/mdlayher/raw v0.0.0-20191009151244-50f2db8cc065 // indirect
+	github.com/stretchr/testify v1.8.1 // indirect
 	github.com/u-root/uio v0.0.0-20221213070652-c3537552635f // indirect
 	github.com/vishvananda/netns v0.0.0-20191106174202-0a2b9b5464df // indirect
-	golang.org/x/net v0.0.0-20201110031124-69a78807bb2b // indirect
+	golang.org/x/net v0.0.0-20211015210444-4f30a5c0130f // indirect
 )

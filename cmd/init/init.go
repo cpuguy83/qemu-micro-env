@@ -21,22 +21,34 @@ import (
 )
 
 func main() {
-	set := flag.NewFlagSet("init", flag.ExitOnError)
-	cgVerP := set.Int("cgroup-version", 2, "cgroup version to use (1 or 2)")
-	debugConsole := set.Bool("debug", false, "Get shell before init is run")
+	cgVerP := flag.Int("cgroup-version", 2, "cgroup version to use (1 or 2)")
+	debugConsole := flag.Bool("debug", false, "Get shell before init is run")
 
 	// remove "-" from begining of args passed by the kernel
-	args := os.Args
 	if len(os.Args) > 1 {
-		args = args[2:]
-	}
-
-	if err := set.Parse(args); err != nil {
-		panic(err)
+		if os.Args[1] == "-" && len(os.Args) > 2 {
+			os.Args = append(os.Args[:1], os.Args[2:]...)
+		}
 	}
 
 	logrus.SetOutput(os.Stderr)
 	logrus.SetFormatter(&nested.Formatter{})
+
+	flag.Parse()
+
+	switch flag.Arg(0) {
+	case "_check":
+		set := flag.NewFlagSet("_check", flag.ExitOnError)
+		checkFl := set.String("text", "yes this is it!", "text to print back")
+
+		if len(flag.Args()) > 1 {
+			if err := set.Parse(flag.Args()[1:]); err != nil {
+				panic(err)
+			}
+		}
+		fmt.Println(*checkFl)
+		return
+	}
 
 	os.Setenv("PATH", "/bin:/sbin:/usr/bin:/usr/sbin")
 	os.Setenv("HOME", "/root")
