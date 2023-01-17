@@ -15,8 +15,8 @@ func JammyKernelKVM(client *dagger.Client) Kernel {
 	jammy := client.Container().From("ubuntu:jammy").
 		WithExec([]string{"/bin/sh", "-c", "apt-get update && apt-get install -y linux-image-kvm"})
 	return Kernel{
-		Kernel: jammy.File("/boot/vmlinuz-*-kvm"),
-		Initrd: jammy.File("/boot/initrd.img-*-kvm"),
+		Kernel: jammy.File("/boot/vmlinuz"),
+		Initrd: jammy.File("/boot/initrd.img"),
 	}
 }
 
@@ -51,7 +51,16 @@ func QemuImg(client *dagger.Client) *dagger.Container {
 		WithMountedCache("/var/cache/apk", client.CacheVolume("var-cache-apk")).
 		WithExec(
 			[]string{"/sbin/apk", "add",
-				"qemu", "qemu-tools", "qemu-img", "qemu-system-x86_64", "qemu-system-aarch64", "bash", "openssh-client", "socat", "e2fsprogs",
+				"qemu",
+				"qemu-tools",
+				"qemu-img",
+				"qemu-system-x86_64",
+				"qemu-system-aarch64",
+				"qemu-system-arm",
+				"bash",
+				"openssh-client",
+				"socat",
+				"e2fsprogs",
 			},
 		)
 }
@@ -72,4 +81,13 @@ func MakeQcowDiff(client *dagger.Client, qcow *dagger.File) *dagger.File {
 			[]string{"/usr/bin/qemu-img", "create", "-f", "qcow2", "-b", "rootfs.qcow2", "-F", "qcow2", "rootfs-diff.qcow2"},
 		).
 		File("/tmp/rootfs/rootfs-diff.qcow2")
+}
+
+func Self(client *dagger.Client) *dagger.File {
+	return client.Container().From("golang:1.19").
+		WithWorkdir("/opt/project").
+		WithMountedDirectory("/opt/project", client.Host().Directory(".")).
+		WithEnvVariable("CGO_ENABLED", "0").
+		WithExec([]string{"/usr/local/go/bin/go", "build", "-o", "/tmp/runner", "./cmd/runner"}).
+		File("/tmp/runner")
 }

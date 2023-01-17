@@ -1,4 +1,4 @@
-module init
+module github.com/cpuguy83/qemu-micro-env/cmd/init
 
 go 1.19
 

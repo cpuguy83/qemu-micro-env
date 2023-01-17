@@ -10,30 +10,10 @@ import (
 	"strings"
 	"time"
 
+	guest "github.com/cpuguy83/qemu-micro-env/cmd/init/api"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 )
-
-type guestCmd struct {
-	Execute string          `json:"execute"`
-	Args    json.RawMessage `json:"arguments"`
-}
-
-type guestResp struct {
-	Return interface{} `json:"return,omitempty"`
-	Error  *guestError `json:"error,omitempty"`
-}
-
-type guestError struct {
-	Msg  string `json:"bufb64"`
-	Code int    `json:"code"`
-	Tag  string `json:"tag"`
-}
-
-type guestSSHAddAuthorizedKeys struct {
-	Keys  []string `json:"keys"`
-	Reset bool     `json:"reset"`
-}
 
 func guestAgent() {
 	f, err := os.OpenFile("/dev/virtio-ports/org.qemu.guest_agent.0", unix.O_RDWR, 0)
@@ -43,7 +23,7 @@ func guestAgent() {
 	defer f.Close()
 
 	rdr := bufio.NewReader(f)
-	var cmd guestCmd
+	var cmd guest.Cmd
 
 	l := logrus.WithField("component", "guest-agent")
 
@@ -66,8 +46,8 @@ func guestAgent() {
 		}
 
 		switch cmd.Execute {
-		case "guest-ssh-add-authorized-keys":
-			var args guestSSHAddAuthorizedKeys
+		case guest.CmdSSHAddAuthorizedKeys:
+			var args guest.SSHAddAuthorizedKeys
 			if err := json.Unmarshal(cmd.Args, &args); err != nil {
 				sendError(f, err, l)
 				continue
@@ -109,7 +89,7 @@ func guestAgent() {
 }
 
 func sendResponse(f *os.File, i interface{}, l *logrus.Entry) {
-	var resp guestResp
+	var resp guest.Response
 	resp.Return = i
 	data, err := json.Marshal(resp)
 	if err != nil {
@@ -124,8 +104,8 @@ func sendResponse(f *os.File, i interface{}, l *logrus.Entry) {
 }
 
 func sendError(f *os.File, err error, l *logrus.Entry) {
-	var resp guestResp
-	resp.Error = &guestError{
+	var resp guest.Response
+	resp.Error = &guest.ErrMsg{
 		Msg:  base64.StdEncoding.EncodeToString([]byte(err.Error())),
 		Code: -1, // TODO: find a better code
 	}
