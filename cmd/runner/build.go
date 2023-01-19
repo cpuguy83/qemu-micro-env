@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"dagger.io/dagger"
 )
@@ -11,19 +14,39 @@ type Kernel struct {
 	Kernel *dagger.File
 }
 
-func JammyKernelKVM(client *dagger.Client) Kernel {
+func JammyKernelKVM(ctx context.Context, client *dagger.Client) (Kernel, error) {
 	jammy := client.Container().From("ubuntu:jammy").
 		WithExec([]string{"/bin/sh", "-c", "apt-get update && apt-get install -y linux-image-kvm"})
-	return Kernel{
-		Kernel: jammy.File("/boot/vmlinuz"),
-		Initrd: jammy.File("/boot/initrd.img"),
+
+	kern, err := jammy.WithExec([]string{"/usr/bin/readlink", "/boot/vmlinuz"}).Stdout(ctx)
+	if err != nil {
+		return Kernel{}, err
 	}
+
+	initrd, err := jammy.WithExec([]string{"/usr/bin/readlink", "/boot/initrd.img"}).Stdout(ctx)
+	if err != nil {
+		return Kernel{}, err
+	}
+
+	return Kernel{
+		Kernel: jammy.File(filepath.Join("/boot", strings.TrimSpace(kern))),
+		Initrd: jammy.File(filepath.Join("/boot", strings.TrimSpace(initrd))),
+	}, nil
 }
 
 func AlpineRootfs(client *dagger.Client) *dagger.Directory {
 	return client.Container().From("alpine:latest").
-		WithExec([]string{"/bin/sh", "-c", "apk add --no-cache docker openssh"}).
+		WithMountedCache("/var/cache/apk", client.CacheVolume("var-cache-apk")).
+		WithExec([]string{"/sbin/apk", "add", "docker", "openssh", "iptables"}).
+		WithExec([]string{"/bin/mkdir", "/lib/modules"}).
 		Rootfs()
+}
+
+func JammyRootfs(client *dagger.Client) *dagger.Directory {
+	return client.Container().From("ubuntu:jammy").
+		WithExec([]string{"/bin/sh", "-c", "apt-get update && apt-get install -y docker.io iptables ssh linux-image-kvm"}).
+		WithExec([]string{"/usr/bin/update-alternatives", "--set", "iptables", "/usr/sbin/iptables-legacy"}).
+		FS()
 }
 
 type InitBuildConfig struct {
@@ -36,12 +59,19 @@ func WithInit(client *dagger.Client, rootfs *dagger.Directory, path string) *dag
 		path = "/sbin/init"
 	}
 
+	initDir := client.Host().Directory("cmd/init")
+
 	f := client.Container().From("golang:1.19").
-		WithMountedDirectory("/opt/init", client.Host().Directory("cmd/init")).
-		WithEnvVariable("CGO_ENABLED", "0").
 		WithMountedCache("/go/pkg/mod", client.CacheVolume("go-pkg")).
 		WithMountedCache("/root/.cache/go-build", client.CacheVolume("go-build")).
-		WithExec([]string{"/bin/sh", "-c", "cd /opt/init && go build -o /tmp/init"}).
+		WithMountedFile("/tmp/build/go.mod", initDir.File("go.mod")).
+		WithMountedFile("/tmp/build/go.sum", initDir.File("go.sum")).
+		WithWorkdir("/tmp/build").
+		WithExec([]string{"/usr/local/go/bin/go", "mod", "download"}).
+		WithMountedDirectory("/opt/init", initDir).
+		WithEnvVariable("CGO_ENABLED", "0").
+		WithWorkdir("/opt/init").
+		WithExec([]string{"/usr/local/go/bin/go", "build", "-o", "/tmp/init"}).
 		File("/tmp/init")
 	return rootfs.WithFile(path, f)
 }
@@ -69,6 +99,7 @@ func MakeQcow(client *dagger.Client, rootfs *dagger.Directory, size int) *dagger
 	return QemuImg(client).
 		WithMountedDirectory("/tmp/rootfs", rootfs).
 		WithExec([]string{"/usr/bin/truncate", "-s", strconv.Itoa(size), "/tmp/rootfs.img"}).
+		WithExec([]string{"/sbin/mkfs.ext4", "-d", "/tmp/rootfs", "/tmp/rootfs.img"}).
 		WithExec([]string{"/usr/bin/qemu-img", "convert", "/tmp/rootfs.img", "-O", "qcow2", "/tmp/rootfs.qcow2"}).
 		File("/tmp/rootfs.qcow2")
 }
@@ -84,10 +115,17 @@ func MakeQcowDiff(client *dagger.Client, qcow *dagger.File) *dagger.File {
 }
 
 func Self(client *dagger.Client) *dagger.File {
+	dir := client.Host().Directory("cmd/runner")
 	return client.Container().From("golang:1.19").
-		WithWorkdir("/opt/project").
-		WithMountedDirectory("/opt/project", client.Host().Directory(".")).
+		WithMountedCache("/go/pkg/mod", client.CacheVolume("go-pkg")).
+		WithMountedCache("/root/.cache/go-build", client.CacheVolume("go-build")).
+		WithMountedFile("/tmp/build/go.mod", dir.File("go.mod")).
+		WithMountedFile("/tmp/build/go.sum", dir.File("go.sum")).
+		WithWorkdir("/tmp/build").
+		WithExec([]string{"/usr/local/go/bin/go", "mod", "download"}).
+		WithMountedDirectory("/opt/project", dir).
 		WithEnvVariable("CGO_ENABLED", "0").
-		WithExec([]string{"/usr/local/go/bin/go", "build", "-o", "/tmp/runner", "./cmd/runner"}).
+		WithWorkdir("/opt/project").
+		WithExec([]string{"/usr/local/go/bin/go", "build", "-o", "/tmp/runner", "."}).
 		File("/tmp/runner")
 }

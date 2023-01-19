@@ -2,23 +2,42 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"dagger.io/dagger"
+	dockerclient "github.com/cpuguy83/go-docker"
+	"github.com/cpuguy83/go-docker/container"
+	"github.com/cpuguy83/go-docker/container/containerapi"
+	"github.com/cpuguy83/go-docker/container/containerapi/mount"
+	"github.com/cpuguy83/go-docker/image"
 	"github.com/cpuguy83/go-mod-copies/platforms"
+	"github.com/cpuguy83/pipes"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
 )
 
 func main() {
-	ctx := context.Background()
+	ctx, cancel := signal.NotifyContext(context.Background(), unix.SIGINT, unix.SIGTERM)
+	defer cancel()
 	if err := do(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -109,6 +128,8 @@ func do(ctx context.Context) error {
 		}
 		fmt.Fprintln(os.Stdout, "false")
 		return nil
+	case "ssh":
+		return doSSH(ctx, flag.Arg(1), "22")
 	case "exec":
 		return doExec(ctx, flag.Args()[1:])
 	case "":
@@ -130,8 +151,11 @@ func do(ctx context.Context) error {
 	}
 	defer client.Close()
 
-	qcow := MakeQcow(client, WithInit(client, AlpineRootfs(client), "/sbin/init"), 10*1024*1024*1024)
-	kernel := JammyKernelKVM(client)
+	qcow := MakeQcow(client, WithInit(client, JammyRootfs(client), "/sbin/custom-init"), 10*1024*1024*1024)
+	kernel, err := JammyKernelKVM(ctx, client)
+	if err != nil {
+		return err
+	}
 
 	if err := os.MkdirAll(*socketDirFl, 0750); err != nil {
 		return err
@@ -144,15 +168,14 @@ func do(ctx context.Context) error {
 
 	portForwards = append([]int{22}, portForwards...)
 
-	QemuImg(client)
-
-	selfBin := Self(client)
-
 	img := QemuImg(client).
-		WithMountedFile("/tmp/rootfs.qcow2", qcow).
-		WithMountedFile("/boot/vmlinuz", kernel.Kernel).
-		WithMountedFile("/boot/initrd.img", kernel.Initrd).
-		WithMountedFile("/tmp/runner", selfBin)
+		WithFile("/tmp/rootfs.qcow2", qcow).
+		WithFile("/boot/vmlinuz", kernel.Kernel).
+		WithFile("/boot/initrd.img", kernel.Initrd)
+
+	if _, err := img.Export(ctx, "build/qemu-img.tar"); err != nil {
+		return err
+	}
 
 	noKvm := *noKvmFl
 	if !noKvm {
@@ -165,21 +188,7 @@ func do(ctx context.Context) error {
 		}
 
 		if !noKvm {
-			checkVmxStr, err := img.
-				WithMountedFile("/tmp/runner", Self(client)).
-				WithExec([]string{
-					"/tmp/runner", "checkvmx",
-				}).Stdout(ctx)
-			if err != nil {
-				return fmt.Errorf("error checking if kvm is supported: %w", err)
-			}
-			ok, err := strconv.ParseBool(strings.TrimSpace(checkVmxStr))
-			if err != nil {
-				return err
-			}
-			if !ok {
-				noKvm = true
-			}
+			noKvm = !canUseHostCPU()
 		}
 	}
 
@@ -188,60 +197,196 @@ func do(ctx context.Context) error {
 		microvmOpts string
 	)
 	if !noKvm {
-		kvmOpts = []string{"-enable-kvm", "-cpu host"}
+		kvmOpts = []string{"-enable-kvm", "-cpu", "host"}
 		microvmOpts = ",x-option-roms=off,isa-serial=off,rtc=off"
 	}
 
 	qemuExec := []string{
-		"/tmp/runner", "exec",
-		"--docker-socket-path", "/run/docker.sock",
 		"/usr/bin/qemu-system-" + *cpuArchFl,
-		"-no-reboot",
 		"-M", "microvm" + microvmOpts,
-		"-kernel", "/boot/vmlinuz",
-		"-initrd", "/boot/initrd.img",
-		"-append", "console=hvc0 root=/dev/vda rw acpi=off reboot=t panic=-1 quiet - --cgroup-version " + strconv.Itoa(*cgVerFl),
-		"-smp", strconv.Itoa(*numCPUFl),
 		"-m", *vmMemFl,
+		"-smp", strconv.Itoa(*numCPUFl),
+		"-no-reboot",
 		"-no-acpi",
 		"-nodefaults",
 		"-no-user-config",
 		"-nographic",
+
 		"-device", "virtio-serial-device",
 		"-chardev", "stdio,id=virtiocon0",
 		"-device", "virtconsole,chardev=virtiocon0",
+
 		"-drive", "id=root,file=/tmp/rootfs.qcow2,format=qcow2,if=none",
 		"-device", "virtio-blk-device,drive=root",
+
 		"-device", "virtio-rng-device",
+
+		"-kernel", "/boot/vmlinuz",
+		"-initrd", "/boot/initrd.img",
+		"-append", "console=hvc0 root=/dev/vda rw acpi=off reboot=t panic=-1 quiet init=/sbin/custom-init - --cgroup-version " + strconv.Itoa(*cgVerFl),
+
+		"-netdev", "user,id=net0,net=192.168.76.0/24,dhcpstart=192.168.76.9,hostfwd=" + portForwardsToQemuFlag(portForwards),
 		"-device", "virtio-net-device,netdev=net0",
-		"-netdev", "user,id=net0," + portForwardsToQemuFlag(portForwards) + ",net=192.168.76.0/24,dhcpstart=192.168.76.9",
-		"-device", " virtio-net-device,netdev=net0",
-		"-add-fd", "fd=3,set=2",
-		"-drive", "file=/dev/fdset/2,index=0,media=disk",
-		// "-chardev", "socket,path=/tmp/qga/qga.sock,server=on,wait=off,id=qga0",
-		// "-device", "virtio-serial-device",
-		// "-device", "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0",
+
+		"-chardev", "pipe,id=ssh_keys,path=/tmp/sockets/authorized_keys",
+		"-device", "virtio-serial-device",
+		"-device", "virtserialport,chardev=ssh_keys,name=authorized_keys",
 	}
 
 	if kvmOpts != nil {
 		qemuExec = append(qemuExec, kvmOpts...)
 	}
 
-	sockPath := filepath.Join(sockDir, "docker.sock")
-	l, err := net.ListenUnix("unix", &net.UnixAddr{
-		Name: sockPath,
-		Net:  "unix",
+	docker := dockerclient.NewClient()
+	f, err := os.Open("build/qemu-img.tar")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	var imageID string
+	if err := docker.ImageService().Load(ctx, f, func(cfg *image.LoadConfig) error {
+		cfg.ConsumeProgress = func(ctx context.Context, rdr io.Reader) error {
+			dec := json.NewDecoder(rdr)
+			var res struct {
+				Stream string `json:"stream"`
+			}
+
+			for {
+				err := dec.Decode(&res)
+				if err != nil {
+					return err
+				}
+
+				res.Stream = strings.TrimSuffix(res.Stream, "\n")
+				_, id, found := strings.Cut(res.Stream, " ID: ")
+				if !found {
+					continue
+				}
+				imageID = id
+				io.Copy(io.Discard, rdr)
+				return nil
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	if !filepath.IsAbs(sockDir) {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		sockDir = filepath.Join(cwd, sockDir)
+	}
+
+	var runnerBin string
+	if cgoEnabled {
+		runnerBin = filepath.Join(sockDir, "runner")
+		if _, err := Self(client).Export(ctx, runnerBin); err != nil {
+			return err
+		}
+	} else {
+		runnerBin, err = filepath.EvalSymlinks("/proc/self/exe")
+		if err != nil {
+			return err
+		}
+		if runnerBin == "" {
+			return errors.New("failed to resolve runner binary path")
+		}
+	}
+
+	c, err := docker.ContainerService().Create(ctx, imageID, func(cfg *container.CreateConfig) {
+		cfg.Spec.OpenStdin = true
+		cfg.Spec.AttachStdin = true
+		cfg.Spec.AttachStdout = true
+		cfg.Spec.AttachStderr = true
+		cfg.Spec.HostConfig.AutoRemove = true
+
+		init := true
+		cfg.Spec.HostConfig.Init = &init
+
+		cfg.Spec.ExposedPorts = map[string]struct{}{}
+		for _, port := range portForwards {
+			cfg.Spec.ExposedPorts[fmt.Sprintf("%d/tcp", port)] = struct{}{}
+		}
+
+		cfg.Spec.HostConfig.PublishAllPorts = true
+
+		cfg.Spec.HostConfig.Mounts = append(cfg.Spec.HostConfig.Mounts, mount.Mount{
+			Type:   mount.TypeBind,
+			Source: sockDir,
+			Target: "/tmp/sockets",
+		})
+		cfg.Spec.HostConfig.Mounts = append(cfg.Spec.HostConfig.Mounts, mount.Mount{
+			Type:   mount.TypeBind,
+			Source: runnerBin,
+			Target: "/tmp/runner",
+		})
+
+		cfg.Spec.Entrypoint = qemuExec
+
+		if !noKvm {
+			cfg.Spec.HostConfig.Devices = append(cfg.Spec.HostConfig.Devices, containerapi.DeviceMapping{
+				PathOnHost:        "/dev/kvm",
+				PathInContainer:   "/dev/kvm",
+				CgroupPermissions: "rwm",
+			})
+		}
 	})
 	if err != nil {
-		return fmt.Errorf("error setting up forwarded docker socket listener: %w", err)
+		return fmt.Errorf("error creating container: %w", err)
 	}
-	defer l.Close()
 
-	_, err = img.WithExec(qemuExec).
-		WithUnixSocket("/run/docker.sock", client.Host().UnixSocket(sockPath)).
-		ExitCode(ctx)
+	defer c.Kill(context.Background())
 
-	return err
+	ctxWait, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	ws, err := c.Wait(ctxWait, container.WithWaitCondition(container.WaitConditionNextExit))
+	if err != nil {
+		return err
+	}
+
+	if err := attachPipes(ctx, c); err != nil {
+		return err
+	}
+
+	if err := c.Start(ctx); err != nil {
+		return err
+	}
+
+	sshErr := make(chan error, 1)
+
+	go func() {
+		i, err := c.Inspect(ctx)
+		if err != nil {
+			sshErr <- err
+			return
+		}
+
+		sshErr <- doSSH(ctx, sockDir, i.NetworkSettings.Ports["22/tcp"][0].HostPort)
+	}()
+
+	ch := make(chan error)
+	go func() {
+		_, err := ws.ExitCode()
+		if err != nil {
+			ch <- err
+		}
+		close(ch)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-ch:
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func portForwardsToQemuFlag(forwards []int) string {
@@ -250,4 +395,175 @@ func portForwardsToQemuFlag(forwards []int) string {
 		out = append(out, fmt.Sprintf("tcp::%d-:%d", f, f))
 	}
 	return strings.Join(out, ",")
+}
+
+func tunnelDocker(ctx context.Context, client *ssh.Client, l net.Listener) {
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer conn.Close()
+
+			sshConn, err := client.Dial("unix", "/run/docker.sock")
+			if err != nil {
+				return
+			}
+			defer sshConn.Close()
+
+			go func() {
+				io.Copy(sshConn, conn)
+				conn.Close()
+				sshConn.Close()
+			}()
+
+			io.Copy(conn, sshConn)
+			conn.Close()
+			sshConn.Close()
+		}()
+	}
+}
+
+func generateKeys(sockDir string) ([]byte, ssh.AuthMethod, error) {
+	priv, err := rsa.GenerateKey(rand.Reader, 4096)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error generating private key: %w", err)
+	}
+
+	encodedBuf := &bytes.Buffer{}
+
+	privateKeyPEM := &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)}
+	if err := pem.Encode(encodedBuf, privateKeyPEM); err != nil {
+		return nil, nil, fmt.Errorf("error pem encoding private key: %w", err)
+	}
+	pubK, err := ssh.NewPublicKey(&priv.PublicKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error creating public key: %w", err)
+	}
+	pub := ssh.MarshalAuthorizedKey(pubK)
+
+	signer, err := ssh.ParsePrivateKey(encodedBuf.Bytes())
+	if err != nil {
+		return nil, nil, fmt.Errorf("error parsing private key: %w", err)
+	}
+
+	return pub, ssh.PublicKeys(signer), nil
+}
+
+func attachPipes(ctx context.Context, c *container.Container) error {
+	eg, ctx := errgroup.WithContext(ctx)
+
+	eg.Go(func() error {
+		stdout, err := c.StdoutPipe(ctx)
+		if err != nil {
+			return err
+		}
+		go func() {
+			io.Copy(os.Stdout, stdout)
+			stdout.Close()
+		}()
+		return nil
+	})
+
+	eg.Go(func() error {
+		stderr, err := c.StderrPipe(ctx)
+		if err != nil {
+			return err
+		}
+
+		go func() {
+			io.Copy(os.Stderr, stderr)
+			stderr.Close()
+		}()
+		return nil
+	})
+
+	eg.Go(func() error {
+		stdin, err := c.StdinPipe(ctx)
+		if err != nil {
+			return err
+		}
+		go func() {
+			io.Copy(stdin, os.Stdin)
+			stdin.Close()
+		}()
+		return nil
+	})
+
+	return eg.Wait()
+}
+
+func doSSH(ctx context.Context, sockDir string, port string) error {
+	fifoPath := filepath.Join(sockDir, "authorized_keys")
+	ch, err := pipes.AsyncOpenFifo(fifoPath, os.O_WRONLY|os.O_CREATE, 0600)
+	if err != nil {
+		return fmt.Errorf("error opening fifo: %s: %w", fifoPath, err)
+	}
+
+	pub, auth, err := generateKeys(sockDir)
+	if err != nil {
+		return err
+	}
+
+	chAuth := make(chan error, 1)
+	go func() {
+		defer close(chAuth)
+		chAuth <- func() error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case result := <-ch:
+				if result.Err != nil {
+					return fmt.Errorf("error opening fifo: %w", result.Err)
+				}
+				defer result.W.Close()
+				if _, err := result.W.Write(append(pub, '\n')); err != nil {
+					return fmt.Errorf("error writing public key to authorized_keys: %w", err)
+				}
+			}
+			return nil
+		}()
+	}()
+
+	var sshClient *ssh.Client
+	sshConfig := &ssh.ClientConfig{
+		User: "root",
+		Auth: []ssh.AuthMethod{auth},
+		// TODO: host-key verification
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         time.Second,
+	}
+
+	fmt.Fprintln(os.Stderr, "waiting for ssh to be available...")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-chAuth:
+			if err != nil {
+				return err
+			}
+		}
+
+		sshClient, err = ssh.Dial("tcp", "127.0.0.1:"+port, sshConfig)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error dialing ssh:", err)
+			time.Sleep(time.Second)
+			continue
+		}
+		break
+	}
+	defer sshClient.Close()
+
+	fmt.Fprintln(os.Stderr, "tunnelling docker socket")
+	l, err := net.Listen("unix", filepath.Join(sockDir, "docker.sock"))
+	if err != nil {
+		return fmt.Errorf("error listening on docker socket: %w", err)
+	}
+	defer l.Close()
+	tunnelDocker(ctx, sshClient, l)
+
+	return nil
 }

@@ -83,9 +83,8 @@ fi
             echo socket ready
             break
         fi
-        ${withSudo} socat "unix-connect:${DISTRO_DIR}/qga.sock" - <<EOF
-{"execute": "guest-ssh-add-authorized-keys", "arguments": {"keys": ["$(cat "${DISTRO_DIR}/ssh_key.pub")"], "reset": true}}
-EOF
+
+        ${withSudo} socat UNIX-CONNECT:"${DISTRO_DIR}/authorized_keys" - <${DISTRO_DIR}/ssh_key.pub
         sleep 1
     done
 ) &
@@ -105,10 +104,10 @@ ${withSudo} qemu-system-x86_64 \
     -device virtio-rng-device \
     -kernel ${kern} \
     -initrd ${initrd} \
-    -append "console=hvc0 root=/dev/vda rw acpi=off reboot=t panic=-1 quiet init=/sbin/custom-init - --cgroup-version ${CGROUP_VERSION}" \
+    -append "console=hvc0 root=/dev/vda rw acpi=off reboot=t panic=-1 init=/sbin/custom-init - --cgroup-version ${CGROUP_VERSION}" \
     -netdev user,id=mynet0,hostfwd=tcp::${FORWARD_SSH_PORT}-:22,hostfwd=tcp::6443-:6443,net=192.168.76.0/24,dhcpstart=192.168.76.9 -device virtio-net-device,netdev=mynet0 \
-    -chardev "socket,path=${DISTRO_DIR}/qga.sock,server=on,wait=off,id=qga0" \
+    -chardev socket,server=on,wait=off,id=docker,path=${DISTRO_DIR}/authorized_keys \
     -device virtio-serial-device \
-    -device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0
+    -device virtserialport,chardev=docker,name=authorized_keys
 
 kill $(jobs -p)

@@ -6,12 +6,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
+	"time"
 
 	nested "github.com/antonfisher/nested-logrus-formatter"
 	dhcp "github.com/insomniacslk/dhcp/dhcpv4/nclient4"
@@ -23,6 +25,7 @@ import (
 func main() {
 	cgVerP := flag.Int("cgroup-version", 2, "cgroup version to use (1 or 2)")
 	debugConsole := flag.Bool("debug", false, "Get shell before init is run")
+	authorizedKeysPipe := flag.String("authorized-keys-pipe", "/dev/virtio-ports/authorized_keys", "Pipe to read authorized keys from")
 
 	// remove "-" from begining of args passed by the kernel
 	if len(os.Args) > 1 {
@@ -81,9 +84,13 @@ func main() {
 
 	setupNetwork()
 
+	logrus.Info(os.Environ())
+
 	cmd := exec.Command("/usr/bin/dockerd")
+	cmd.Env = append(cmd.Env, "PATH=/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin")
 	cmd.Stdout = os.Stdout
 	cmd.Stdin = os.Stdin
+
 	l := logrus.New()
 	l.SetOutput(os.Stderr)
 	l.SetFormatter(&nested.Formatter{})
@@ -91,7 +98,9 @@ func main() {
 
 	go reap()
 	ssh()
-	go guestAgent()
+	if err := setupSSHKeys(*authorizedKeysPipe); err != nil {
+		panic(err)
+	}
 
 	fmt.Fprintln(os.Stderr, "Welcome to the vm!")
 
@@ -243,4 +252,39 @@ func ssh() {
 	if err := cmd.Start(); err != nil {
 		panic(err)
 	}
+}
+
+func setupSSHKeys(pipe string) error {
+	f, err := os.OpenFile(pipe, os.O_RDONLY, 0)
+	if err != nil {
+		return fmt.Errorf("error opening ssh key: %w", err)
+	}
+
+	rdr := bufio.NewReader(f)
+	var (
+		line []byte
+	)
+
+	for {
+		logrus.Info("waiting for ssh key")
+		line, err = rdr.ReadBytes('\n')
+		if err != nil {
+			if err == io.EOF {
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			return fmt.Errorf("error reading ssh key: %w", err)
+		}
+		break
+	}
+
+	if err := os.MkdirAll("/root/.ssh", 0700); err != nil {
+		return fmt.Errorf("error creating /root/.ssh directory: %w", err)
+	}
+
+	if err := os.WriteFile("/root/.ssh/authorized_keys", line, 0600); err != nil {
+		return fmt.Errorf("error writing authorized_keys: %w", err)
+	}
+	logrus.Info("wrote authorized_keys")
+	return nil
 }
