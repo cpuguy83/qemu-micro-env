@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,16 +15,26 @@ import (
 	"time"
 
 	nested "github.com/antonfisher/nested-logrus-formatter"
-	dhcp "github.com/insomniacslk/dhcp/dhcpv4/nclient4"
+	"github.com/cpuguy83/go-vsock"
+	"github.com/creack/pty"
 	"github.com/sirupsen/logrus"
-	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
+
+type logFormatter struct {
+	base *nested.Formatter
+}
+
+func (f *logFormatter) Format(entry *logrus.Entry) ([]byte, error) {
+	entry.Data["component"] = "init"
+	return f.base.Format(entry)
+}
 
 func main() {
 	cgVerP := flag.Int("cgroup-version", 2, "cgroup version to use (1 or 2)")
 	debugConsole := flag.Bool("debug", false, "Get shell before init is run")
 	authorizedKeysPipe := flag.String("authorized-keys-pipe", "/dev/virtio-ports/authorized_keys", "Pipe to read authorized keys from")
+	useVsock := flag.Bool("vsock", false, "Use vsock to proxy docker socket")
 
 	// remove "-" from begining of args passed by the kernel
 	if len(os.Args) > 1 {
@@ -35,7 +44,7 @@ func main() {
 	}
 
 	logrus.SetOutput(os.Stderr)
-	logrus.SetFormatter(&nested.Formatter{})
+	logrus.SetFormatter(&logFormatter{&nested.Formatter{}})
 
 	flag.Parse()
 
@@ -53,6 +62,12 @@ func main() {
 		return
 	}
 
+	if data, err := os.ReadFile("/etc/resolv.conf"); err != nil || len(data) == 0 {
+		if err := os.WriteFile("/etc/resolv.conf", []byte("nameserver 1.1.1.1"), 0644); err != nil {
+			panic(err)
+		}
+	}
+
 	os.Setenv("PATH", "/bin:/sbin:/usr/bin:/usr/sbin")
 	os.Setenv("HOME", "/root")
 	pwd, err := os.Getwd()
@@ -63,12 +78,27 @@ func main() {
 
 	logrus.Info("init: " + strings.Join(os.Args, " "))
 
+	if *useVsock {
+		go listenVsock()
+	}
+
 	if *debugConsole {
 		cmd := exec.Command("/bin/bash")
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Run()
+		cmd.Env = os.Environ()
+		cmd.Env = append(cmd.Env, "TERM=xterm-256color")
+		cmd.Env = append(cmd.Env, "HOME=/root")
+		pty, err := pty.Start(cmd)
+		if err != nil {
+			panic(err)
+		}
+		defer pty.Close()
+
+		go io.Copy(pty, os.Stdin)
+		go io.Copy(os.Stdout, pty)
+		if err := cmd.Wait(); err != nil {
+			panic(err)
+		}
+		pty.Close()
 	}
 
 	cgVer := *cgVerP
@@ -97,9 +127,11 @@ func main() {
 	cmd.Stderr = l.WithField("component", "dockerd").Writer()
 
 	go reap()
-	ssh()
-	if err := setupSSHKeys(*authorizedKeysPipe); err != nil {
-		panic(err)
+	if !*useVsock {
+		ssh()
+		if err := setupSSHKeys(*authorizedKeysPipe); err != nil {
+			panic(err)
+		}
 	}
 
 	fmt.Fprintln(os.Stderr, "Welcome to the vm!")
@@ -110,60 +142,34 @@ func main() {
 }
 
 func setupNetwork() {
-	link, err := netlink.LinkByName("eth0")
-	if err != nil {
-		panic(err)
-	}
-	if err := netlink.LinkSetUp(link); err != nil {
-		panic(err)
-	}
+	// ls, err := netlink.LinkList()
+	// if err != nil {
+	// 	panic(err)
+	// }
 
-	lo, err := netlink.LinkByName("lo")
-	if err != nil {
-		panic(err)
-	}
-	netlink.LinkSetUp(lo)
+	// ip, cidr, err := net.ParseCIDR(ipAddr)
+	// if err != nil {
+	// 	panic(err)
+	// }
 
-	client, err := dhcp.New("eth0")
-	if err != nil {
-		panic(err)
-	}
-	defer client.Close()
+	// for _, l := range ls {
+	// 	if err := netlink.LinkSetUp(l); err != nil {
+	// 		panic(err)
+	// 	}
 
-	lease, err := client.Request(context.Background())
-	if err != nil {
-		panic(err)
-	}
-	defer client.Release(lease)
+	// 	if l.Attrs().Name != "eth0" {
+	// 		continue
+	// 	}
 
-	err = netlink.AddrAdd(link, &netlink.Addr{
-		IPNet: &net.IPNet{
-			IP:   lease.ACK.YourIPAddr,
-			Mask: lease.ACK.SubnetMask(),
-		},
-		Label:     "eth0",
-		Flags:     int(lease.ACK.Flags),
-		Broadcast: lease.ACK.BroadcastAddress(),
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	if len(lease.ACK.DNS()) > 0 {
-		b := strings.Builder{}
-		for _, addr := range lease.ACK.DNS() {
-			b.WriteString("nameserver " + addr.String() + "\n")
-		}
-		if err := os.WriteFile("/etc/resolv.conf", []byte(b.String()), 0644); err != nil {
-			panic(err)
-		}
-	}
-
-	if err := netlink.RouteAdd(&netlink.Route{
-		Gw: lease.ACK.ServerIPAddr,
-	}); err != nil {
-		panic(err)
-	}
+	// 	if err := netlink.AddrAdd(l, &netlink.Addr{
+	// 		IPNet: &net.IPNet{
+	// 			IP:   ip,
+	// 			Mask: cidr.Mask,
+	// 		},
+	// 	}); err != nil {
+	// 		panic(err)
+	// 	}
+	// }
 }
 
 func mountCgroupV1() {
@@ -287,4 +293,33 @@ func setupSSHKeys(pipe string) error {
 	}
 	logrus.Info("wrote authorized_keys")
 	return nil
+}
+
+func listenVsock() {
+	l, err := vsock.ListenVsock(unix.VMADDR_CID_ANY, 2375)
+	if err != nil {
+		panic(err)
+	}
+	defer l.Close()
+
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			panic(err)
+		}
+
+		dc, err := net.Dial("unix", "/run/docker.sock")
+		if err != nil {
+			logrus.WithError(err).Error("error dialing docker socket")
+			conn.Close()
+			return
+		}
+		go func() {
+			defer conn.Close()
+			defer dc.Close()
+
+			go io.Copy(dc, conn)
+			io.Copy(conn, dc)
+		}()
+	}
 }
