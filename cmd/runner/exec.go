@@ -33,18 +33,6 @@ func doExec(ctx context.Context, args []string) error {
 	logrus.Debugf("%+v", cfg)
 	logrus.Debug(args)
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	if !cfg.UseVsock {
-		go func() {
-			if err := doSSH(ctx, "/tmp/sockets", "22", cfg.Uid, cfg.Gid); err != nil {
-				logrus.WithError(err).Error("ssh failed")
-				cancel()
-			}
-		}()
-	}
-
 	return execVM(ctx, cfg)
 }
 
@@ -117,8 +105,14 @@ func execVM(ctx context.Context, cfg VMConfig) error {
 	args = append(args, machineType...)
 
 	netAddr := "user,id=net0,net=192.168.76.0/24,dhcpstart=192.168.76.9"
+	var localPorts []int
 	if len(cfg.PortForwards) > 0 {
-		netAddr += ",hostfwd=" + portForwardsToQemuFlag(cfg.PortForwards)
+		var err error
+		localPorts, err = getLocalPorts(cfg.PortForwards)
+		if err != nil {
+			return fmt.Errorf("error getting local ports: %w", err)
+		}
+		netAddr += "," + portForwardsToQemuFlag(localPorts, cfg.PortForwards)
 	}
 	args = append(args, []string{
 		"-netdev", netAddr,
@@ -147,12 +141,81 @@ func execVM(ctx context.Context, cfg VMConfig) error {
 
 	logrus.WithField("args", args).Debug("executing qemu")
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
 
+	var sshPort string
+	// For some reason qemu user mode networking doesn't work with docker port forwarding (connections just hang).
+	// So... we'll forward the ports ourselves and use an ephemeral port for the qemu hostfwd spec.
+	for i, port := range localPorts {
+		if cfg.PortForwards[i] == 22 {
+			sshPort = strconv.Itoa(port)
+		}
+		if err := forwardPort(cfg.PortForwards[i], port); err != nil {
+			return fmt.Errorf("error forwarding port: %w", err)
+		}
+	}
+
+	if !cfg.UseVsock {
+		go func() {
+			if err := doSSH(ctx, "/tmp/sockets", sshPort, cfg.Uid, cfg.Gid); err != nil {
+				logrus.WithError(err).Error("ssh failed")
+				cancel()
+			}
+		}()
+	}
+
 	return cmd.Run()
+}
+
+func forwardPort(localPort, remotePort int) error {
+	l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:"+strconv.Itoa(localPort)))
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		defer l.Close()
+
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+
+			go func() {
+				remote, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(remotePort))
+				if err != nil {
+					logrus.WithError(err).Error("dial failed")
+					return
+				}
+
+				go func() {
+					_, err := io.Copy(remote, conn)
+					if err != nil {
+						logrus.WithError(err).Error("copy failed")
+					}
+					remote.Close()
+					conn.Close()
+				}()
+				go func() {
+					_, err := io.Copy(conn, remote)
+					if err != nil {
+						logrus.WithError(err).Error("copy failed")
+					}
+					remote.Close()
+					conn.Close()
+				}()
+			}()
+		}
+	}()
+
+	return nil
 }
 
 func doVsock(cid uint32, uid, gid int) error {
@@ -209,4 +272,30 @@ func doVsock(cid uint32, uid, gid int) error {
 	}()
 
 	return nil
+}
+
+func getLocalPorts(forwards []int) ([]int, error) {
+	out := make([]int, 0, len(forwards))
+	data, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range")
+	if err != nil {
+		return nil, fmt.Errorf("error reading local port range: %w", err)
+	}
+
+	start, err := strconv.Atoi(strings.Fields(string(data))[0])
+	if err != nil {
+		return nil, fmt.Errorf("error parsing local port range: %w", err)
+	}
+
+	for i := range forwards {
+		out = append(out, start+i)
+	}
+	return out, nil
+}
+
+func portForwardsToQemuFlag(local, forwards []int) string {
+	var out []string
+	for i, f := range forwards {
+		out = append(out, fmt.Sprintf("hostfwd=tcp::%d-:%d", local[i], f))
+	}
+	return strings.Join(out, ",")
 }

@@ -347,6 +347,8 @@ func do(ctx context.Context) error {
 			cfg.Spec.HostConfig.SecurityOpt = []string{"seccomp=unconfined"}
 		}
 
+		cfg.Spec.Env = append(cfg.Spec.Env, "SSH_AUTH_SOCK=/tmp/sockets/agent.sock")
+
 		cfg.Spec.HostConfig.Mounts = append(cfg.Spec.HostConfig.Mounts, mount.Mount{
 			Type:   mount.TypeBind,
 			Source: sockDir,
@@ -446,14 +448,6 @@ func do(ctx context.Context) error {
 
 	logrus.Info("Container exited")
 	return nil
-}
-
-func portForwardsToQemuFlag(forwards []int) string {
-	var out []string
-	for _, f := range forwards {
-		out = append(out, fmt.Sprintf("tcp::%d-:%d", f, f))
-	}
-	return strings.Join(out, ",")
 }
 
 func generateKeys(sockDir string) ([]byte, []byte, error) {
@@ -566,7 +560,9 @@ func doSSH(ctx context.Context, sockDir string, port string, uid, gid int) error
 		}
 	}
 
-	out, err := exec.CommandContext(ctx, "ssh-agent").CombinedOutput()
+	agentSock := filepath.Join(sockDir, "agent.sock")
+	unix.Unlink(agentSock)
+	out, err := exec.CommandContext(ctx, "ssh-agent", "-a", agentSock).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("error starting ssh-agent: %s: %w", out, err)
 	}
@@ -575,6 +571,10 @@ func doSSH(ctx context.Context, sockDir string, port string, uid, gid int) error
 	cmd.Stdin = bytes.NewReader(priv)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("error adding private key to ssh-agent: %s: %w", out, err)
+	}
+
+	if err := os.Chown(agentSock, uid, gid); err != nil {
+		return fmt.Errorf("error setting ownership on ssh agent socket: %w", err)
 	}
 
 	sock := filepath.Join(sockDir, "docker.sock")
