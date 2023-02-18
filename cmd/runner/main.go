@@ -2,25 +2,18 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"dagger.io/dagger"
 	nested "github.com/antonfisher/nested-logrus-formatter"
@@ -29,10 +22,7 @@ import (
 	"github.com/cpuguy83/go-docker/container/containerapi"
 	"github.com/cpuguy83/go-docker/container/containerapi/mount"
 	"github.com/cpuguy83/go-docker/image"
-	"github.com/cpuguy83/go-mod-copies/platforms"
-	"github.com/cpuguy83/pipes"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/crypto/ssh"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
 )
@@ -97,71 +87,6 @@ func (f *intListFlag) Set(s string) error {
 		*f = append(*f, i)
 	}
 	return nil
-}
-
-func getDefaultCPUArch() string {
-	p := platforms.DefaultSpec()
-	return archStringToQemu(p.Architecture)
-}
-
-func archStringToQemu(arch string) string {
-	switch arch {
-	case "amd64", "x86_64":
-		return "x86_64"
-	case "arm64", "aarch64":
-		return "aarch64"
-	case "arm":
-		return "arm"
-	default:
-		panic("unsupported architecture")
-	}
-}
-
-type VMConfig struct {
-	CPUArch       string
-	NumCPU        int
-	PortForwards  intListFlag
-	NoKVM         bool
-	NoMicro       bool
-	CgroupVersion int
-	Memory        string
-	DebugConsole  bool
-	UseVsock      bool
-	Uid           int
-	Gid           int
-}
-
-func (c VMConfig) AsFlags() []string {
-	flags := []string{
-		"--cgroup-version=" + strconv.Itoa(c.CgroupVersion),
-		"--no-kvm=" + strconv.FormatBool(c.NoKVM),
-		"--num-cpus=" + strconv.Itoa(c.NumCPU),
-		"--memory=" + c.Memory,
-		"--cpu-arch=" + archStringToQemu(c.CPUArch),
-		"--no-micro=" + strconv.FormatBool(c.NoMicro),
-		"--debug-console=" + strconv.FormatBool(c.DebugConsole),
-		"--vsock=" + strconv.FormatBool(c.UseVsock),
-		"--uid=" + strconv.Itoa(c.Uid),
-		"--gid=" + strconv.Itoa(c.Gid),
-	}
-	if len(c.PortForwards) > 0 {
-		flags = append(flags, "--vm-port-forward="+strings.Join(convertPortForwards(c.PortForwards), ","))
-	}
-	return flags
-}
-
-func addVMFlags(set *flag.FlagSet, cfg *VMConfig) {
-	set.IntVar(&cfg.CgroupVersion, "cgroup-version", 2, "cgroup version to use")
-	set.BoolVar(&cfg.NoKVM, "no-kvm", false, "disable KVM")
-	set.IntVar(&cfg.NumCPU, "num-cpus", 2, "number of CPUs to use")
-	set.StringVar(&cfg.Memory, "memory", "4G", "memory to use for the VM")
-	set.StringVar(&cfg.CPUArch, "cpu-arch", getDefaultCPUArch(), "CPU architecture to use for the VM")
-	set.BoolVar(&cfg.NoMicro, "no-micro", false, "disable microVMs - useful for allowing the VM to have access to PCI devices")
-	set.Var(&cfg.PortForwards, "vm-port-forward", "port forwards to set up from the VM")
-	set.BoolVar(&cfg.DebugConsole, "debug-console", false, "enable debug console")
-	set.BoolVar(&cfg.UseVsock, "vsock", false, "use vsock for communication")
-	set.IntVar(&cfg.Uid, "uid", os.Getuid(), "uid to use for the VM")
-	set.IntVar(&cfg.Gid, "gid", os.Getgid(), "gid to use for the VM")
 }
 
 func do(ctx context.Context) error {
@@ -450,24 +375,6 @@ func do(ctx context.Context) error {
 	return nil
 }
 
-func generateKeys(sockDir string) ([]byte, []byte, error) {
-	priv, err := rsa.GenerateKey(rand.Reader, 4096)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error generating private key: %w", err)
-	}
-
-	privateKeyPEM := &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)}
-	pem := pem.EncodeToMemory(privateKeyPEM)
-
-	pubK, err := ssh.NewPublicKey(priv.Public())
-	if err != nil {
-		return nil, nil, fmt.Errorf("error creating public key: %w", err)
-	}
-	pub := ssh.MarshalAuthorizedKey(pubK)
-
-	return pub, pem, nil
-}
-
 func attachPipes(ctx context.Context, c *container.Container) error {
 	eg, ctx := errgroup.WithContext(ctx)
 
@@ -508,121 +415,4 @@ func attachPipes(ctx context.Context, c *container.Container) error {
 	})
 
 	return eg.Wait()
-}
-
-func doSSH(ctx context.Context, sockDir string, port string, uid, gid int) error {
-	logrus.Debug("Preparing SSH")
-	fifoPath := filepath.Join(sockDir, "authorized_keys")
-
-	if err := os.MkdirAll(sockDir, 0700); err != nil {
-		return fmt.Errorf("error creating socket directory: %w", err)
-	}
-
-	ch, err := pipes.AsyncOpenFifo(fifoPath, os.O_WRONLY|os.O_CREATE, 0600)
-	if err != nil {
-		return fmt.Errorf("error opening fifo: %s: %w", fifoPath, err)
-	}
-
-	logrus.Debug("Generating keys")
-	pub, priv, err := generateKeys(sockDir)
-	if err != nil {
-		return err
-	}
-
-	logrus.Debug("Writing authorized keys")
-	chAuth := make(chan error, 1)
-	go func() {
-		defer close(chAuth)
-		chAuth <- func() error {
-			logrus.Info("Waiting for fifo to be ready...")
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case result := <-ch:
-				if result.Err != nil {
-					return fmt.Errorf("error opening fifo: %w", result.Err)
-				}
-				defer result.W.Close()
-				if _, err := result.W.Write(append(pub, '\n')); err != nil {
-					return fmt.Errorf("error writing public key to authorized_keys: %w", err)
-				}
-				logrus.Debug("Public key written to authorized_keys fifo")
-			}
-			return nil
-		}()
-	}()
-
-	select {
-	case <-ctx.Done():
-	case err := <-chAuth:
-		if err != nil {
-			return err
-		}
-	}
-
-	agentSock := filepath.Join(sockDir, "agent.sock")
-	unix.Unlink(agentSock)
-	out, err := exec.CommandContext(ctx, "ssh-agent", "-a", agentSock).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("error starting ssh-agent: %s: %w", out, err)
-	}
-	cmd := exec.Command("/bin/sh", "-c", "eval \""+string(out)+"\" && ssh-add -")
-
-	cmd.Stdin = bytes.NewReader(priv)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("error adding private key to ssh-agent: %s: %w", out, err)
-	}
-
-	if err := os.Chown(agentSock, uid, gid); err != nil {
-		return fmt.Errorf("error setting ownership on ssh agent socket: %w", err)
-	}
-
-	sock := filepath.Join(sockDir, "docker.sock")
-	unix.Unlink(sock)
-	logrus.Debug(string(out))
-
-	sockKV, _, found := strings.Cut(string(out), ";")
-	if !found {
-		return fmt.Errorf("error parsing ssh-agent output: %s", out)
-	}
-
-	for i := 0; ; i++ {
-		cmd = exec.Command(
-			"/usr/bin/ssh",
-			"-f",
-			"-nNT",
-			"-o", "BatchMode=yes",
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "ExitOnForwardFailure=yes",
-			"-L", sock+":/run/docker.sock",
-			"127.0.0.1", "-p", port,
-		)
-		cmd.Env = append(cmd.Env, sockKV)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			if strings.Contains(string(out), "Connection refused") || strings.Contains(string(out), "Connection reset by peer") {
-				if i == 20 {
-					logrus.WithError(err).Warn(string(out))
-					i = 0
-				}
-				time.Sleep(100 * time.Millisecond)
-				continue
-			}
-			return fmt.Errorf("error setting up ssh tunnel: %w: %s", err, string(out))
-		}
-		break
-	}
-
-	if err := os.Chown(sock, uid, gid); err != nil {
-		return fmt.Errorf("error setting ownership on proxied docker socket: %w", err)
-	}
-
-	return nil
-}
-
-func convertPortForwards(ls []int) []string {
-	var result []string
-	for _, l := range ls {
-		result = append(result, strconv.Itoa(l))
-	}
-	return result
 }

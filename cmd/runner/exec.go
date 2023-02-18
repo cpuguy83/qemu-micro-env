@@ -2,21 +2,15 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
-	"io"
-	"net"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
-	"time"
 
 	nested "github.com/antonfisher/nested-logrus-formatter"
-	"github.com/cpuguy83/go-vsock"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/sys/unix"
 )
 
 func doExec(ctx context.Context, args []string) error {
@@ -171,131 +165,4 @@ func execVM(ctx context.Context, cfg VMConfig) error {
 	}
 
 	return cmd.Run()
-}
-
-func forwardPort(localPort, remotePort int) error {
-	l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:"+strconv.Itoa(localPort)))
-	if err != nil {
-		return err
-	}
-
-	go func() {
-		defer l.Close()
-
-		for {
-			conn, err := l.Accept()
-			if err != nil {
-				return
-			}
-
-			go func() {
-				remote, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(remotePort))
-				if err != nil {
-					logrus.WithError(err).Error("dial failed")
-					return
-				}
-
-				go func() {
-					_, err := io.Copy(remote, conn)
-					if err != nil {
-						logrus.WithError(err).Error("copy failed")
-					}
-					remote.Close()
-					conn.Close()
-				}()
-				go func() {
-					_, err := io.Copy(conn, remote)
-					if err != nil {
-						logrus.WithError(err).Error("copy failed")
-					}
-					remote.Close()
-					conn.Close()
-				}()
-			}()
-		}
-	}()
-
-	return nil
-}
-
-func doVsock(cid uint32, uid, gid int) error {
-	sock := "/tmp/sockets/docker.sock"
-	l, err := net.Listen("unix", sock)
-	if err != nil {
-		if !errors.Is(err, unix.EADDRINUSE) {
-			return err
-		}
-		if err := unix.Unlink(sock); err != nil {
-			logrus.WithError(err).Error("unlink failed")
-		}
-		l, err = net.Listen("unix", "/tmp/sockets/docker.sock")
-		if err != nil {
-			return err
-		}
-	}
-
-	if err := os.Chown(sock, uid, gid); err != nil {
-		return fmt.Errorf("error setting ownership on proxied docker socket: %w", err)
-	}
-
-	go func() {
-		defer l.Close()
-
-		for {
-			conn, err := l.Accept()
-			if err != nil {
-				logrus.WithError(err).Error("accept failed")
-				return
-			}
-			go func() {
-				defer conn.Close()
-				var vsConn net.Conn
-
-				for i := 0; ; i++ {
-					vsConn, err = vsock.DialVsock(cid, 2375)
-					if err != nil {
-						if i == 10 {
-							logrus.WithError(err).Error("vsock dial failing, retrying...")
-							i = 0
-						}
-						time.Sleep(250 * time.Millisecond)
-						continue
-					}
-					break
-				}
-				defer vsConn.Close()
-
-				go io.Copy(vsConn, conn)
-				io.Copy(conn, vsConn)
-			}()
-		}
-	}()
-
-	return nil
-}
-
-func getLocalPorts(forwards []int) ([]int, error) {
-	out := make([]int, 0, len(forwards))
-	data, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range")
-	if err != nil {
-		return nil, fmt.Errorf("error reading local port range: %w", err)
-	}
-
-	start, err := strconv.Atoi(strings.Fields(string(data))[0])
-	if err != nil {
-		return nil, fmt.Errorf("error parsing local port range: %w", err)
-	}
-
-	for i := range forwards {
-		out = append(out, start+i)
-	}
-	return out, nil
-}
-
-func portForwardsToQemuFlag(local, forwards []int) string {
-	var out []string
-	for i, f := range forwards {
-		out = append(out, fmt.Sprintf("hostfwd=tcp::%d-:%d", local[i], f))
-	}
-	return strings.Join(out, ",")
 }
