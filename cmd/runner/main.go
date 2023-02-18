@@ -137,7 +137,7 @@ func (c VMConfig) AsFlags() []string {
 		"--no-kvm=" + strconv.FormatBool(c.NoKVM),
 		"--num-cpus=" + strconv.Itoa(c.NumCPU),
 		"--memory=" + c.Memory,
-		"--cpu-arch=" + c.CPUArch,
+		"--cpu-arch=" + archStringToQemu(c.CPUArch),
 		"--no-micro=" + strconv.FormatBool(c.NoMicro),
 		"--debug-console=" + strconv.FormatBool(c.DebugConsole),
 		"--vsock=" + strconv.FormatBool(c.UseVsock),
@@ -168,12 +168,16 @@ func do(ctx context.Context) error {
 	var cfg VMConfig
 	addVMFlags(flag.CommandLine, &cfg)
 
+	debug := flag.Bool("debug", false, "enable debug logging")
 	socketDirFl := flag.String("socket-dir", "build/", "directory to use for the socket")
 
 	flag.Parse()
 
 	logrus.SetOutput(os.Stderr)
 	logrus.SetFormatter(&logFormatter{&nested.Formatter{}})
+	if *debug {
+		logrus.SetLevel(logrus.DebugLevel)
+	}
 
 	switch flag.Arg(0) {
 	case "checkvmx":
@@ -201,7 +205,11 @@ func do(ctx context.Context) error {
 		cfg.NoMicro = true
 	}
 
-	client, err := dagger.Connect(ctx, dagger.WithLogOutput(os.Stderr))
+	l := logrus.New()
+	l.SetFormatter(&nested.Formatter{})
+	l.SetOutput(os.Stderr)
+	l.SetLevel(logrus.StandardLogger().Level)
+	client, err := dagger.Connect(ctx, dagger.WithLogOutput(l.WithField("component", "builder").WriterLevel(logrus.DebugLevel)))
 	if err != nil {
 		return err
 	}
@@ -243,6 +251,7 @@ func do(ctx context.Context) error {
 			case cfg.CPUArch == "arm" && defaultArch == "arm64":
 			default:
 				cfg.NoKVM = true
+				cfg.NoMicro = true
 			}
 		}
 		if !cfg.NoKVM {
@@ -508,7 +517,7 @@ func attachPipes(ctx context.Context, c *container.Container) error {
 }
 
 func doSSH(ctx context.Context, sockDir string, port string, uid, gid int) error {
-	logrus.Info("Preparing SSH")
+	logrus.Debug("Preparing SSH")
 	fifoPath := filepath.Join(sockDir, "authorized_keys")
 
 	if err := os.MkdirAll(sockDir, 0700); err != nil {
@@ -520,13 +529,13 @@ func doSSH(ctx context.Context, sockDir string, port string, uid, gid int) error
 		return fmt.Errorf("error opening fifo: %s: %w", fifoPath, err)
 	}
 
-	logrus.Info("Generating keys")
+	logrus.Debug("Generating keys")
 	pub, priv, err := generateKeys(sockDir)
 	if err != nil {
 		return err
 	}
 
-	logrus.Info("Writing authorized keys")
+	logrus.Debug("Writing authorized keys")
 	chAuth := make(chan error, 1)
 	go func() {
 		defer close(chAuth)
@@ -543,7 +552,7 @@ func doSSH(ctx context.Context, sockDir string, port string, uid, gid int) error
 				if _, err := result.W.Write(append(pub, '\n')); err != nil {
 					return fmt.Errorf("error writing public key to authorized_keys: %w", err)
 				}
-				logrus.Info("Public key written to authorized_keys fifo")
+				logrus.Debug("Public key written to authorized_keys fifo")
 			}
 			return nil
 		}()
@@ -557,7 +566,7 @@ func doSSH(ctx context.Context, sockDir string, port string, uid, gid int) error
 		}
 	}
 
-	out, err := exec.Command("ssh-agent").CombinedOutput()
+	out, err := exec.CommandContext(ctx, "ssh-agent").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("error starting ssh-agent: %s: %w", out, err)
 	}
@@ -570,7 +579,7 @@ func doSSH(ctx context.Context, sockDir string, port string, uid, gid int) error
 
 	sock := filepath.Join(sockDir, "docker.sock")
 	unix.Unlink(sock)
-	logrus.Info(string(out))
+	logrus.Debug(string(out))
 
 	sockKV, _, found := strings.Cut(string(out), ";")
 	if !found {
@@ -591,8 +600,8 @@ func doSSH(ctx context.Context, sockDir string, port string, uid, gid int) error
 		cmd.Env = append(cmd.Env, sockKV)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			if strings.Contains(string(out), "Connection refused") || strings.Contains(string(out), "Connection reset by peer") {
-				if i == 10 {
-					logrus.WithError(err).Info(string(out))
+				if i == 20 {
+					logrus.WithError(err).Warn(string(out))
 					i = 0
 				}
 				time.Sleep(100 * time.Millisecond)
@@ -606,58 +615,6 @@ func doSSH(ctx context.Context, sockDir string, port string, uid, gid int) error
 	if err := os.Chown(sock, uid, gid); err != nil {
 		return fmt.Errorf("error setting ownership on proxied docker socket: %w", err)
 	}
-
-	// var sshClient *ssh.Client
-
-	// logrus.Info("Waiting for ssh to be available...")
-
-	// var dialer net.Dialer
-	// for {
-	// 	select {
-	// 	case <-ctx.Done():
-	// 		return ctx.Err()
-	// 	case err := <-chAuth:
-	// 		if err != nil {
-	// 			return err
-	// 		}
-	// 	}
-
-	// 	ctxT, cancel := context.WithTimeout(ctx, time.Second)
-	// 	conn, err := dialer.DialContext(ctxT, "tcp", port+":22")
-	// 	cancel()
-	// 	if err != nil {
-	// 		logrus.WithError(err).Warn("error dialing ssh")
-	// 		time.Sleep(time.Second)
-	// 		continue
-	// 	}
-	// 	defer conn.Close()
-
-	// 	signer, err := ssh.ParsePrivateKey(priv)
-	// 	if err != nil {
-	// 		return fmt.Errorf("error parsing private key: %w", err)
-	// 	}
-	// 	sshConn, ch1, ch2, err := ssh.NewClientConn(conn, port+":22", &ssh.ClientConfig{
-	// 		Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
-	// 		// TODO: host-key verification
-	// 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-	// 	})
-	// 	if err != nil {
-	// 		logrus.WithError(err).WithField("addr", port).Warn("Error making ssh client conn")
-	// 		time.Sleep(time.Second)
-	// 		continue
-	// 	}
-	// 	sshClient = ssh.NewClient(sshConn, ch1, ch2)
-	// 	break
-	// }
-	// defer sshClient.Close()
-
-	// logrus.Info("Tunnelling docker socket")
-	// l, err := net.Listen("unix", filepath.Join(sockDir, "docker.sock"))
-	// if err != nil {
-	// 	return fmt.Errorf("error listening on docker socket: %w", err)
-	// }
-	// defer l.Close()
-	// tunnelDocker(ctx, sshClient, l)
 
 	return nil
 }

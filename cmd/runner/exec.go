@@ -30,23 +30,25 @@ func doExec(ctx context.Context, args []string) error {
 	logrus.SetOutput(os.Stderr)
 	logrus.SetFormatter(&logFormatter{&nested.Formatter{}})
 
-	logrus.Infof("%+v", cfg)
-	logrus.Info(args)
+	logrus.Debugf("%+v", cfg)
+	logrus.Debug(args)
 
-	canUseHostCPU()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	if !cfg.UseVsock {
 		go func() {
 			if err := doSSH(ctx, "/tmp/sockets", "22", cfg.Uid, cfg.Gid); err != nil {
 				logrus.WithError(err).Error("ssh failed")
+				cancel()
 			}
 		}()
 	}
 
-	return execVM(cfg)
+	return execVM(ctx, cfg)
 }
 
-func execVM(cfg VMConfig) error {
+func execVM(ctx context.Context, cfg VMConfig) error {
 	var (
 		kvmOpts     []string
 		microvmOpts string
@@ -57,12 +59,15 @@ func execVM(cfg VMConfig) error {
 	}
 
 	var (
-		deviceSuffix   string
-		microVmOptList []string
+		deviceSuffix string
+		machineType  []string
 	)
+
 	if !cfg.NoMicro {
 		deviceSuffix = "-device"
-		microVmOptList = []string{"-M", "microvm" + microvmOpts}
+		machineType = []string{"-M", "microvm" + microvmOpts}
+	} else if cfg.NoKVM && cfg.CPUArch != "x86_64" {
+		machineType = []string{"-M", "virt"}
 	}
 
 	device := func(name string, opts ...string) string {
@@ -109,7 +114,7 @@ func execVM(cfg VMConfig) error {
 		"-device", device("virtio-rng", "rng=rng0"),
 	}
 
-	args = append(args, microVmOptList...)
+	args = append(args, machineType...)
 
 	netAddr := "user,id=net0,net=192.168.76.0/24,dhcpstart=192.168.76.9"
 	if len(cfg.PortForwards) > 0 {
@@ -140,9 +145,9 @@ func execVM(cfg VMConfig) error {
 		args = append(args, kvmOpts...)
 	}
 
-	logrus.WithField("args", args).Info("executing qemu")
+	logrus.WithField("args", args).Debug("executing qemu")
 
-	cmd := exec.Command(args[0], args[1:]...)
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
