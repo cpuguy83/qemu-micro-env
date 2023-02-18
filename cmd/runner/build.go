@@ -46,7 +46,7 @@ func JammyRootfs(client *dagger.Client) *dagger.Directory {
 	return client.Container().From("ubuntu:jammy").
 		WithExec([]string{"/bin/sh", "-c", "apt-get update && apt-get install -y docker.io iptables ssh linux-image-kvm"}).
 		WithExec([]string{"/usr/bin/update-alternatives", "--set", "iptables", "/usr/sbin/iptables-legacy"}).
-		FS()
+		Rootfs()
 }
 
 type InitBuildConfig struct {
