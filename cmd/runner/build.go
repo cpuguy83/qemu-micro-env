@@ -61,7 +61,7 @@ func WithInit(client *dagger.Client, rootfs *dagger.Directory, path string) *dag
 
 	initDir := client.Host().Directory("cmd/init")
 
-	f := client.Container().From("golang:1.19").
+	f := client.Container().From("golang:1.20").
 		WithMountedCache("/go/pkg/mod", client.CacheVolume("go-pkg")).
 		WithMountedCache("/root/.cache/go-build", client.CacheVolume("go-build")).
 		WithMountedFile("/tmp/build/go.mod", initDir.File("go.mod")).
@@ -116,7 +116,7 @@ func MakeQcowDiff(client *dagger.Client, qcow *dagger.File) *dagger.File {
 
 func Self(client *dagger.Client) *dagger.File {
 	dir := client.Host().Directory("cmd/runner")
-	return client.Container().From("golang:1.19").
+	return client.Container().From("golang:1.20").
 		WithMountedCache("/go/pkg/mod", client.CacheVolume("go-pkg")).
 		WithMountedCache("/root/.cache/go-build", client.CacheVolume("go-build")).
 		WithMountedFile("/tmp/build/go.mod", dir.File("go.mod")).

@@ -4,7 +4,7 @@ FROM ubuntu:22.04 AS rootfs-jammy
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y linux-image-kvm docker.io iptables ssh ntp
 
-FROM golang:1.19 AS init
+FROM golang:1.20 AS init
 WORKDIR /opt/init
 COPY cmd/init/go.* ./
 RUN	\

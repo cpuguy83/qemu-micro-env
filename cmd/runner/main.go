@@ -17,7 +17,7 @@ import (
 
 	"dagger.io/dagger"
 	nested "github.com/antonfisher/nested-logrus-formatter"
-	dockerclient "github.com/cpuguy83/go-docker"
+	"github.com/cpuguy83/go-docker"
 	"github.com/cpuguy83/go-docker/container"
 	"github.com/cpuguy83/go-docker/container/containerapi"
 	"github.com/cpuguy83/go-docker/container/containerapi/mount"
@@ -40,8 +40,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), unix.SIGINT, unix.SIGTERM)
 	defer cancel()
 	if err := do(ctx); err != nil {
-		logrus.Error(err)
-		os.Exit(1)
+		logrus.Fatal(err)
 	}
 }
 
@@ -90,6 +89,7 @@ func (f *intListFlag) Set(s string) error {
 }
 
 func do(ctx context.Context) error {
+
 	var cfg VMConfig
 	addVMFlags(flag.CommandLine, &cfg)
 
@@ -134,6 +134,47 @@ func do(ctx context.Context) error {
 	l.SetFormatter(&nested.Formatter{})
 	l.SetOutput(os.Stderr)
 	l.SetLevel(logrus.StandardLogger().Level)
+
+	docker := docker.NewClient()
+
+	daggerImgRef := image.Remote{Host: "registry.dagger.io", Locator: "engine", Tag: "v0.4.0"}
+	if err := docker.ImageService().Pull(ctx, daggerImgRef); err != nil {
+		return fmt.Errorf("error pulling engine image: %w", err)
+	}
+
+	daggerCtr, err := docker.ContainerService().Create(ctx, daggerImgRef.String(),
+		container.WithCreateHostConfig(
+			containerapi.HostConfig{
+				Privileged: true,
+				Mounts: []mount.Mount{
+					{Type: "volume", Source: "qemu-micro-env-dagger", Target: "/var/lib/dagger"},
+				},
+			},
+		),
+	)
+	if err != nil {
+		return fmt.Errorf("error creating dagger container: %w", err)
+	}
+	defer func() {
+		docker.ContainerService().Remove(context.Background(), daggerCtr.ID(), container.WithRemoveForce)
+	}()
+
+	if l.GetLevel() >= logrus.DebugLevel {
+		stderr, err := daggerCtr.StderrPipe(ctx)
+		if err != nil {
+			l.WithError(err).Warn("could not get engine stderr pipe")
+		} else {
+			defer stderr.Close()
+			go func() {
+				io.Copy(l.WithField("component", "engine").WriterLevel(logrus.DebugLevel), stderr)
+			}()
+		}
+	}
+	if err := daggerCtr.Start(ctx); err != nil {
+		return fmt.Errorf("error starting dagger container: %w", err)
+	}
+
+	os.Setenv("_EXPERIMENTAL_DAGGER_RUNNER_HOST", "docker-container://"+daggerCtr.ID())
 	client, err := dagger.Connect(ctx, dagger.WithLogOutput(l.WithField("component", "builder").WriterLevel(logrus.DebugLevel)))
 	if err != nil {
 		return err
@@ -165,6 +206,7 @@ func do(ctx context.Context) error {
 		WithFile("/boot/vmlinuz", kernel.Kernel).
 		WithFile("/boot/initrd.img", kernel.Initrd)
 
+	l.Info("Building qemu image")
 	if _, err := img.Export(ctx, "build/qemu-img.tar"); err != nil {
 		return err
 	}
@@ -186,7 +228,6 @@ func do(ctx context.Context) error {
 
 	args := append([]string{"/tmp/runner", "exec"}, cfg.AsFlags()...)
 
-	docker := dockerclient.NewClient()
 	f, err := os.Open("build/qemu-img.tar")
 	if err != nil {
 		return err
@@ -194,6 +235,7 @@ func do(ctx context.Context) error {
 	defer f.Close()
 
 	var imageID string
+	l.Info("Loading image into docker...")
 	if err := docker.ImageService().Load(ctx, f, func(cfg *image.LoadConfig) error {
 		cfg.ConsumeProgress = func(ctx context.Context, rdr io.Reader) error {
 			dec := json.NewDecoder(rdr)
@@ -204,6 +246,9 @@ func do(ctx context.Context) error {
 			for {
 				err := dec.Decode(&res)
 				if err != nil {
+					if err == io.EOF {
+						return nil
+					}
 					return err
 				}
 
