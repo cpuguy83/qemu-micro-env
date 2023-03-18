@@ -47,7 +47,7 @@ func do(ctx context.Context) error {
 	vmconfig.AddVMFlags(flag.CommandLine, &cfg)
 
 	debug := flag.Bool("debug", false, "enable debug logging")
-	socketDirFl := flag.String("socket-dir", "_output/", "directory to use for the socket")
+	stateDirFl := flag.String("state-dir", "_output/", "directory to use for state files (socket, image, etc)")
 
 	mountSpecFl := flags.NewMountSpec(&mount.Mount{Type: mount.TypeVolume, Source: "qemu-micro-env-dagger-state"})
 	flags.AddMountSpecFlag(flag.CommandLine, mountSpecFl, "dagger-cache-mount")
@@ -86,7 +86,7 @@ func do(ctx context.Context) error {
 		return err
 	}
 
-	imgTar := filepath.Join(*socketDirFl, "qemu-img.tar")
+	imgTar := filepath.Join(*stateDirFl, "qemu-img.tar")
 	if _, err := img.Export(ctx, imgTar); err != nil {
 		return err
 	}
@@ -130,13 +130,9 @@ func do(ctx context.Context) error {
 		return err
 	}
 
-	if err := os.MkdirAll(*socketDirFl, 0750); err != nil {
+	stateDir := *stateDirFl
+	if err := os.MkdirAll(stateDir, 0750); err != nil {
 		return err
-	}
-
-	sockDir := *socketDirFl
-	if err := os.MkdirAll(sockDir, 0750); err != nil {
-		return fmt.Errorf("could not create sockets dir: %w", err)
 	}
 
 	if !cfg.UseVsock {
@@ -144,12 +140,12 @@ func do(ctx context.Context) error {
 		cfg.PortForwards = append([]int{22}, cfg.PortForwards...)
 	}
 
-	if !filepath.IsAbs(sockDir) {
+	if !filepath.IsAbs(stateDir) {
 		cwd, err := os.Getwd()
 		if err != nil {
 			return err
 		}
-		sockDir = filepath.Join(cwd, sockDir)
+		stateDir = filepath.Join(cwd, stateDir)
 	}
 
 	portForwards := cfg.PortForwards
@@ -183,7 +179,7 @@ func do(ctx context.Context) error {
 
 		cfg.Spec.HostConfig.Mounts = append(cfg.Spec.HostConfig.Mounts, mount.Mount{
 			Type:   mount.TypeBind,
-			Source: sockDir,
+			Source: stateDir,
 			Target: "/tmp/sockets",
 		})
 		cfg.Spec.Entrypoint = args
