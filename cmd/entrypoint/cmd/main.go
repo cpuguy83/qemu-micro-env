@@ -10,19 +10,35 @@ import (
 	"strings"
 
 	nested "github.com/antonfisher/nested-logrus-formatter"
+	"github.com/cpuguy83/qemu-micro-env/cmd/entrypoint/vmconfig"
 	"github.com/sirupsen/logrus"
 )
 
-func doExec(ctx context.Context, args []string) error {
-	var cfg VMConfig
+type logFormatter struct {
+	base *nested.Formatter
+}
 
-	flags := flag.NewFlagSet("exec", flag.ExitOnError)
-	addVMFlags(flags, &cfg)
+func (f *logFormatter) Format(entry *logrus.Entry) ([]byte, error) {
+	entry.Data["component"] = "qemu-exec"
+	return f.base.Format(entry)
+}
 
-	flags.Parse(args)
-
+func main() {
 	logrus.SetOutput(os.Stderr)
 	logrus.SetFormatter(&logFormatter{&nested.Formatter{}})
+
+	if err := doExec(context.Background(), os.Args[1:]); err != nil {
+		logrus.Fatal(err)
+	}
+}
+
+func doExec(ctx context.Context, args []string) error {
+	var cfg vmconfig.VMConfig
+
+	flags := flag.CommandLine
+	vmconfig.AddVMFlags(flags, &cfg)
+
+	flags.Parse(args)
 
 	logrus.Debugf("%+v", cfg)
 	logrus.Debug(args)
@@ -30,7 +46,7 @@ func doExec(ctx context.Context, args []string) error {
 	return execVM(ctx, cfg)
 }
 
-func execVM(ctx context.Context, cfg VMConfig) error {
+func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 	var (
 		kvmOpts     []string
 		microvmOpts string
@@ -102,11 +118,11 @@ func execVM(ctx context.Context, cfg VMConfig) error {
 	var localPorts []int
 	if len(cfg.PortForwards) > 0 {
 		var err error
-		localPorts, err = getLocalPorts(cfg.PortForwards)
+		localPorts, err = vmconfig.GetLocalPorts(cfg.PortForwards)
 		if err != nil {
 			return fmt.Errorf("error getting local ports: %w", err)
 		}
-		netAddr += "," + portForwardsToQemuFlag(localPorts, cfg.PortForwards)
+		netAddr += "," + vmconfig.PortForwardsToQemuFlag(localPorts, cfg.PortForwards)
 	}
 	args = append(args, []string{
 		"-netdev", netAddr,
@@ -115,7 +131,7 @@ func execVM(ctx context.Context, cfg VMConfig) error {
 
 	if cfg.UseVsock {
 		args = append(args, []string{"-device", "vhost-vsock-pci,guest-cid=10"}...)
-		if err := doVsock(10, cfg.Uid, cfg.Gid); err != nil {
+		if err := vmconfig.DoVsock(10, cfg.Uid, cfg.Gid); err != nil {
 			return fmt.Errorf("error setting up vsock: %w", err)
 		}
 	} else {
@@ -150,7 +166,7 @@ func execVM(ctx context.Context, cfg VMConfig) error {
 		if cfg.PortForwards[i] == 22 {
 			sshPort = strconv.Itoa(port)
 		}
-		if err := forwardPort(cfg.PortForwards[i], port); err != nil {
+		if err := vmconfig.ForwardPort(cfg.PortForwards[i], port); err != nil {
 			return fmt.Errorf("error forwarding port: %w", err)
 		}
 	}

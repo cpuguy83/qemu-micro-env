@@ -1,4 +1,4 @@
-package main
+package vmconfig
 
 import (
 	"flag"
@@ -9,12 +9,12 @@ import (
 	"github.com/cpuguy83/go-mod-copies/platforms"
 )
 
-func getDefaultCPUArch() string {
+func GetDefaultCPUArch() string {
 	p := platforms.DefaultSpec()
-	return archStringToQemu(p.Architecture)
+	return ArchStringToQemu(p.Architecture)
 }
 
-func archStringToQemu(arch string) string {
+func ArchStringToQemu(arch string) string {
 	switch arch {
 	case "amd64", "x86_64":
 		return "x86_64"
@@ -47,7 +47,7 @@ func (c VMConfig) AsFlags() []string {
 		"--no-kvm=" + strconv.FormatBool(c.NoKVM),
 		"--num-cpus=" + strconv.Itoa(c.NumCPU),
 		"--memory=" + c.Memory,
-		"--cpu-arch=" + archStringToQemu(c.CPUArch),
+		"--cpu-arch=" + ArchStringToQemu(c.CPUArch),
 		"--no-micro=" + strconv.FormatBool(c.NoMicro),
 		"--debug-console=" + strconv.FormatBool(c.DebugConsole),
 		"--vsock=" + strconv.FormatBool(c.UseVsock),
@@ -60,12 +60,12 @@ func (c VMConfig) AsFlags() []string {
 	return flags
 }
 
-func addVMFlags(set *flag.FlagSet, cfg *VMConfig) {
+func AddVMFlags(set *flag.FlagSet, cfg *VMConfig) {
 	set.IntVar(&cfg.CgroupVersion, "cgroup-version", 2, "cgroup version to use")
 	set.BoolVar(&cfg.NoKVM, "no-kvm", false, "disable KVM")
 	set.IntVar(&cfg.NumCPU, "num-cpus", 2, "number of CPUs to use")
 	set.StringVar(&cfg.Memory, "memory", "4G", "memory to use for the VM")
-	set.StringVar(&cfg.CPUArch, "cpu-arch", getDefaultCPUArch(), "CPU architecture to use for the VM")
+	set.StringVar(&cfg.CPUArch, "cpu-arch", GetDefaultCPUArch(), "CPU architecture to use for the VM")
 	set.BoolVar(&cfg.NoMicro, "no-micro", false, "disable microVMs - useful for allowing the VM to have access to PCI devices")
 	set.Var(&cfg.PortForwards, "vm-port-forward", "port forwards to set up from the VM")
 	set.BoolVar(&cfg.DebugConsole, "debug-console", false, "enable debug console")

@@ -1,6 +1,0 @@
-build
-.git
-Dockerfile
-.gitignore
-.dockerignore
-Makefile

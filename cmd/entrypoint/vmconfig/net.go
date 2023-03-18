@@ -1,4 +1,4 @@
-package main
+package vmconfig
 
 import (
 	"errors"
@@ -45,7 +45,7 @@ func convertPortForwards(ls []int) []string {
 	return result
 }
 
-func forwardPort(localPort, remotePort int) error {
+func ForwardPort(localPort, remotePort int) error {
 	l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:"+strconv.Itoa(localPort)))
 	if err != nil {
 		return err
@@ -90,7 +90,7 @@ func forwardPort(localPort, remotePort int) error {
 	return nil
 }
 
-func doVsock(cid uint32, uid, gid int) error {
+func DoVsock(cid uint32, uid, gid int) error {
 	sock := "/tmp/sockets/docker.sock"
 	l, err := net.Listen("unix", sock)
 	if err != nil {
@@ -146,7 +146,7 @@ func doVsock(cid uint32, uid, gid int) error {
 	return nil
 }
 
-func getLocalPorts(forwards []int) ([]int, error) {
+func GetLocalPorts(forwards []int) ([]int, error) {
 	out := make([]int, 0, len(forwards))
 	data, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range")
 	if err != nil {
@@ -164,7 +164,7 @@ func getLocalPorts(forwards []int) ([]int, error) {
 	return out, nil
 }
 
-func portForwardsToQemuFlag(local, forwards []int) string {
+func PortForwardsToQemuFlag(local, forwards []int) string {
 	var out []string
 	for i, f := range forwards {
 		out = append(out, fmt.Sprintf("hostfwd=tcp::%d-:%d", local[i], f))
