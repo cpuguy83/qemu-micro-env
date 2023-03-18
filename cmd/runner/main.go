@@ -19,6 +19,7 @@ import (
 	"github.com/cpuguy83/go-docker/container/containerapi/mount"
 	"github.com/cpuguy83/go-docker/image"
 	"github.com/cpuguy83/qemu-micro-env/cmd/entrypoint/vmconfig"
+	"github.com/cpuguy83/qemu-micro-env/flags"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
@@ -47,9 +48,13 @@ func do(ctx context.Context) error {
 
 	debug := flag.Bool("debug", false, "enable debug logging")
 	socketDirFl := flag.String("socket-dir", "_output/", "directory to use for the socket")
-	noCacheFl := flag.Bool("no-cache", false, "do not use the cache")
+
+	mountSpecFl := flags.NewMountSpec(&mount.Mount{Type: mount.TypeVolume, Source: "qemu-micro-env-dagger-state"})
+	flags.AddMountSpecFlag(flag.CommandLine, mountSpecFl, "dagger-cache-mount")
 
 	flag.Parse()
+
+	cacheMount := mountSpecFl.AsMount()
 
 	logrus.SetOutput(os.Stderr)
 	logrus.SetFormatter(&logFormatter{&nested.Formatter{}})
@@ -70,7 +75,7 @@ func do(ctx context.Context) error {
 
 	docker := docker.NewClient()
 
-	client, cleanup, err := getDaggerClient(ctx, docker, l, *noCacheFl)
+	client, cleanup, err := getDaggerClient(ctx, docker, l, cacheMount)
 	if err != nil {
 		return err
 	}
@@ -323,7 +328,7 @@ func attachPipes(ctx context.Context, c *container.Container) error {
 	return eg.Wait()
 }
 
-func getDaggerClient(ctx context.Context, docker *docker.Client, l *logrus.Logger, noCache bool) (_ *dagger.Client, cleanup func(), retErr error) {
+func getDaggerClient(ctx context.Context, docker *docker.Client, l *logrus.Logger, cacheMount flags.Optional[mount.Mount]) (_ *dagger.Client, cleanup func(), retErr error) {
 	logOpt := dagger.WithLogOutput(l.WithField("component", "builder").WriterLevel(logrus.DebugLevel))
 	cleanup = func() {}
 	if docker == nil || os.Getenv("_EXPERIMENTAL_DAGGER_RUNNER_HOST") != "" {
@@ -337,8 +342,12 @@ func getDaggerClient(ctx context.Context, docker *docker.Client, l *logrus.Logge
 	}
 
 	var mounts []mount.Mount
-	if !noCache {
-		mounts = append(mounts, mount.Mount{Type: "volume", Source: "qemu-micro-env-dagger", Target: "/var/lib/dagger"})
+	if cacheMount.IsSome() {
+		mnt := cacheMount.Unwrap()
+		if mnt.Target == "" {
+			mnt.Target = "/var/lib/dagger"
+		}
+		mounts = append(mounts, mnt)
 	}
 
 	ctr, err := docker.ContainerService().Create(ctx, daggerImgRef.String(),

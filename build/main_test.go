@@ -3,48 +3,19 @@ package build
 import (
 	"context"
 	"flag"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"dagger.io/dagger"
 	"github.com/cpuguy83/go-docker/container/containerapi/mount"
 	env "github.com/cpuguy83/qemu-micro-env"
+	"github.com/cpuguy83/qemu-micro-env/flags"
 )
 
 var (
 	client *dagger.Client
 )
-
-type mountSpec mount.Mount
-
-func (m *mountSpec) Set(s string) error {
-	split := strings.Split(s, ",")
-	for _, s := range split {
-		k, v, ok := strings.Cut(s, "=")
-		if !ok {
-			return fmt.Errorf("invalid mount spec: %s", s)
-		}
-		switch k {
-		case "type":
-			m.Type = mount.Type(v)
-		case "source":
-			m.Source = v
-		default:
-			return fmt.Errorf("unknown mount spec key: %s", k)
-		}
-	}
-	if m.Type == "" || m.Source == "" {
-		return fmt.Errorf("invalid mount spec, both type and source keys are required: %s", s)
-	}
-	return nil
-}
-
-func (m *mountSpec) String() string {
-	return fmt.Sprintf("type=%s,source=%s", m.Type, m.Source)
-}
 
 func TestMain(m *testing.M) {
 	var (
@@ -58,22 +29,24 @@ func TestMain(m *testing.M) {
 	}
 
 	defaultPath := filepath.Join(cwd, "_output/test-cache")
-	cacheMountFl := &mountSpec{
-		Type:   "bind",
-		Source: defaultPath,
-	}
-	flag.Var(cacheMountFl, "cache", "Cache volume for dagger. Provided like a docker volume mount spec (type=volume,source=foo or type=bind,source=/foo)")
+	cacheMountFl := flags.NewMountSpec(&mount.Mount{Type: mount.TypeBind, Source: defaultPath})
+	flags.AddMountSpecFlag(flag.CommandLine, cacheMountFl, "cache")
 
 	flag.Parse()
 
-	if cacheMountFl.Source == defaultPath {
-		if err := os.MkdirAll(defaultPath, 0750); err != nil {
-			panic(err)
+	cacheMount := cacheMountFl.AsMount()
+	var mnt *mount.Mount
+	if cacheMount.IsSome() {
+		m := cacheMount.Unwrap()
+		if m.Source == defaultPath {
+			if err := os.MkdirAll(defaultPath, 0750); err != nil {
+				panic(err)
+			}
 		}
+		mnt = &m
 	}
 
-	cacheMount := mount.Mount(*cacheMountFl)
-	client, cleanup, err = env.EnsureDagger(context.Background(), &cacheMount)
+	client, cleanup, err = env.EnsureDagger(context.Background(), mnt)
 	if err != nil {
 		panic(err)
 	}
