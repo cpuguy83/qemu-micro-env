@@ -346,6 +346,8 @@ func getDaggerClient(ctx context.Context, docker *docker.Client, l *logrus.Logge
 		mounts = append(mounts, mnt)
 	}
 
+	const cacheConfigEnvName = "_EXPERIMENTAL_DAGGER_CACHE_CONFIG"
+
 	ctr, err := docker.ContainerService().Create(ctx, daggerImgRef.String(),
 		container.WithCreateHostConfig(
 			containerapi.HostConfig{
@@ -353,6 +355,11 @@ func getDaggerClient(ctx context.Context, docker *docker.Client, l *logrus.Logge
 				Mounts:     mounts,
 			},
 		),
+		func(cfg *container.CreateConfig) {
+			if v, ok := os.LookupEnv(cacheConfigEnvName); ok {
+				cfg.Spec.Config.Env = append(cfg.Spec.Config.Env, cacheConfigEnvName+"="+v)
+			}
+		},
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error creating dagger container: %w", err)
