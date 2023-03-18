@@ -1,12 +1,15 @@
 package vmconfig
 
 import (
+	"bufio"
 	"flag"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/cpuguy83/go-mod-copies/platforms"
+	"golang.org/x/sys/unix"
 )
 
 func GetDefaultCPUArch() string {
@@ -14,14 +17,24 @@ func GetDefaultCPUArch() string {
 	return ArchStringToQemu(p.Architecture)
 }
 
+const (
+	goAmd64 = "amd64"
+	amd64   = "x86_64"
+	goArm64 = "arm64"
+	arm64   = "aarch64"
+	arm     = "arm"
+)
+
 func ArchStringToQemu(arch string) string {
+	// TODO: This is pretty terrible since it is extremely limited and doesn't support all the possible values.
+	arch = strings.ToLower(arch)
 	switch arch {
-	case "amd64", "x86_64":
-		return "x86_64"
-	case "arm64", "aarch64":
-		return "aarch64"
-	case "arm":
-		return "arm"
+	case goAmd64, amd64:
+		return amd64
+	case goArm64, arm64:
+		return arm64
+	case arm:
+		return arm
 	default:
 		panic("unsupported architecture")
 	}
@@ -32,6 +45,7 @@ type VMConfig struct {
 	NumCPU        int
 	PortForwards  intListFlag
 	NoKVM         bool
+	RequireKVM    bool
 	NoMicro       bool
 	CgroupVersion int
 	Memory        string
@@ -53,6 +67,7 @@ func (c VMConfig) AsFlags() []string {
 		"--vsock=" + strconv.FormatBool(c.UseVsock),
 		"--uid=" + strconv.Itoa(c.Uid),
 		"--gid=" + strconv.Itoa(c.Gid),
+		"--require-kvm=" + strconv.FormatBool(c.RequireKVM),
 	}
 	if len(c.PortForwards) > 0 {
 		flags = append(flags, "--vm-port-forward="+strings.Join(convertPortForwards(c.PortForwards), ","))
@@ -72,4 +87,48 @@ func AddVMFlags(set *flag.FlagSet, cfg *VMConfig) {
 	set.BoolVar(&cfg.UseVsock, "vsock", false, "use vsock for communication")
 	set.IntVar(&cfg.Uid, "uid", os.Getuid(), "uid to use for the VM")
 	set.IntVar(&cfg.Gid, "gid", os.Getgid(), "gid to use for the VM")
+	set.BoolVar(&cfg.RequireKVM, "require-kvm", false, "require KVM to be available (will fail if not available)")
+}
+
+var vmxRegexp = regexp.MustCompile(`flags.*:.*(vmx|svm)`)
+
+func canVirtualize(arch string) bool {
+	arch = ArchStringToQemu(arch)
+	host := GetDefaultCPUArch()
+	if arch == host {
+		return true
+	}
+
+	// TODO: CPU feature check to ensure the arm64 cpu supports arm instructions natively.
+	// While this is normally the case, it is not guaranteed nor is it encoded in the arm64 spec.
+	return host == arm64 && arch == arm
+}
+
+func CanUseHostCPU(arch string) bool {
+	if !canVirtualize(arch) {
+		return false
+	}
+
+	_, err := os.Stat("/dev/kvm")
+	if err != nil {
+		if err := unix.Mknod("/dev/kvm", unix.S_IFCHR|0666, int(unix.Mkdev(10, 232))); err != nil {
+			return false
+		}
+	}
+
+	f, err := os.Open("/proc/cpuinfo")
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+
+	for scanner.Scan() {
+		if vmxRegexp.MatchString(scanner.Text()) {
+			return true
+		}
+	}
+
+	return false
 }

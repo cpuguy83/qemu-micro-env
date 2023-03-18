@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
@@ -10,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"dagger.io/dagger"
@@ -43,33 +41,6 @@ func main() {
 	}
 }
 
-var vmxRegexp = regexp.MustCompile(`flags.*:.*(vmx|svm)`)
-
-func canUseHostCPU() bool {
-	_, err := os.Stat("/dev/kvm")
-	if err != nil {
-		if err := unix.Mknod("/dev/kvm", unix.S_IFCHR|0666, int(unix.Mkdev(10, 232))); err != nil {
-			return false
-		}
-	}
-
-	f, err := os.Open("/proc/cpuinfo")
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-
-	for scanner.Scan() {
-		if vmxRegexp.MatchString(scanner.Text()) {
-			return true
-		}
-	}
-
-	return false
-}
-
 func do(ctx context.Context) error {
 	var cfg vmconfig.VMConfig
 	vmconfig.AddVMFlags(flag.CommandLine, &cfg)
@@ -92,11 +63,6 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("invalid cgroup version: %d", cfg.CgroupVersion)
 	}
 
-	if cfg.UseVsock {
-		// microvm is incompatible with vsock as vsock requires a pci device
-		cfg.NoMicro = true
-	}
-
 	l := logrus.New()
 	l.SetFormatter(&nested.Formatter{})
 	l.SetOutput(os.Stderr)
@@ -115,40 +81,12 @@ func do(ctx context.Context) error {
 		return err
 	}
 
-	if _, err := img.Export(ctx, "build/qemu-img.tar"); err != nil {
+	imgTar := filepath.Join(*socketDirFl, "qemu-img.tar")
+	if _, err := img.Export(ctx, imgTar); err != nil {
 		return err
 	}
 
-	if err := os.MkdirAll(*socketDirFl, 0750); err != nil {
-		return err
-	}
-
-	sockDir := *socketDirFl
-	if err := os.MkdirAll(sockDir, 0750); err != nil {
-		return fmt.Errorf("could not create sockets dir: %w", err)
-	}
-
-	if !cfg.UseVsock {
-		// add the ssh port forward if we're not using vsock
-		cfg.PortForwards = append([]int{22}, cfg.PortForwards...)
-	}
-
-	defaultArch := vmconfig.GetDefaultCPUArch()
-	if !cfg.NoKVM {
-		if cfg.CPUArch != defaultArch {
-			switch {
-			case cfg.CPUArch == "arm" && defaultArch == "arm64":
-			default:
-				cfg.NoKVM = true
-				cfg.NoMicro = true
-			}
-		}
-		if !cfg.NoKVM {
-			cfg.NoKVM = !canUseHostCPU()
-		}
-	}
-
-	f, err := os.Open("build/qemu-img.tar")
+	f, err := os.Open(imgTar)
 	if err != nil {
 		return err
 	}
@@ -185,6 +123,20 @@ func do(ctx context.Context) error {
 		return nil
 	}); err != nil {
 		return err
+	}
+
+	if err := os.MkdirAll(*socketDirFl, 0750); err != nil {
+		return err
+	}
+
+	sockDir := *socketDirFl
+	if err := os.MkdirAll(sockDir, 0750); err != nil {
+		return fmt.Errorf("could not create sockets dir: %w", err)
+	}
+
+	if !cfg.UseVsock {
+		// add the ssh port forward if we're not using vsock
+		cfg.PortForwards = append([]int{22}, cfg.PortForwards...)
 	}
 
 	if !filepath.IsAbs(sockDir) {

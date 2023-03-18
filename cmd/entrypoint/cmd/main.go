@@ -51,6 +51,14 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 		kvmOpts     []string
 		microvmOpts string
 	)
+
+	if !cfg.NoKVM {
+		cfg.NoKVM = !vmconfig.CanUseHostCPU(cfg.CPUArch)
+	}
+	if cfg.NoKVM && cfg.RequireKVM {
+		return fmt.Errorf("kvm is required by user but not available on this system for arch %s", cfg.CPUArch)
+	}
+
 	if !cfg.NoKVM {
 		kvmOpts = []string{"-enable-kvm", "-cpu", "host"}
 		microvmOpts = ",x-option-roms=off,isa-serial=off,rtc=off"
@@ -60,6 +68,11 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 		deviceSuffix string
 		machineType  []string
 	)
+
+	if cfg.UseVsock {
+		// microvm is incompatible with vsock as vsock requires a pci device
+		cfg.NoMicro = true
+	}
 
 	if !cfg.NoMicro {
 		deviceSuffix = "-device"
