@@ -118,7 +118,7 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 
 		"-kernel", "/boot/vmlinuz",
 		"-initrd", "/boot/initrd.img",
-		"-append", "console=hvc0 root=/dev/vda rw acpi=off reboot=t panic=-1 ip=dhcp quiet init=/sbin/custom-init - --cgroup-version " + strconv.Itoa(cfg.CgroupVersion) + debugArg + vsockArg,
+		"-append", "console=hvc0 root=/dev/vda rw acpi=off reboot=t panic=-1 ip=dhcp quiet init=/sbin/custom-init - --cgroup-version " + strconv.Itoa(cfg.CgroupVersion) + debugArg + vsockArg + " " + cfg.InitCmd,
 
 		// pass through the host's rng device to the guest
 		"-object", "rng-random,id=rng0,filename=/dev/urandom",

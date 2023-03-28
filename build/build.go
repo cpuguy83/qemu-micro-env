@@ -1,27 +1,42 @@
 package build
 
 import (
-	"context"
-
-	"dagger.io/dagger"
+	"github.com/moby/buildkit/client/llb"
 )
 
-type Kernel struct {
-	Initrd *dagger.File
-	Kernel *dagger.File
+type File struct {
+	st llb.State
+	p  string
 }
 
-type VMSpec struct {
+func (f File) Path() string {
+	return f.p
+}
+
+func (f File) State() llb.State {
+	return f.st
+}
+
+func NewFile(st llb.State, p string) File {
+	return File{st: st, p: p}
+}
+
+type Kernel struct {
+	Initrd File
+	Kernel File
+}
+
+type DiskImageSpec struct {
 	Kernel Kernel
-	Rootfs *dagger.Directory
+	Rootfs llb.State
 	Size   int64
 }
 
-func (s *VMSpec) Build(ctx context.Context, client *dagger.Client) *dagger.File {
-	return QcowFrom(client, client.Container().WithRootfs(s.Rootfs).
-		WithFile("/boot/vmlinuz", s.Kernel.Kernel).
-		WithFile("/boot/initrd.img", s.Kernel.Initrd).
-		Rootfs(),
-		int(s.Size),
-	)
+func (s *DiskImageSpec) Build() File {
+	states := []llb.State{s.Rootfs, s.Kernel.Kernel.State()}
+	if s.Kernel.Initrd.Path() != "" {
+		states = append(states, s.Kernel.Initrd.State())
+	}
+	st := llb.Merge(states)
+	return QcowFrom(st, s.Size)
 }

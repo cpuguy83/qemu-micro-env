@@ -116,7 +116,13 @@ func main() {
 
 	logrus.Info(os.Environ())
 
-	cmd := exec.Command("/usr/bin/dockerd")
+	exe := flag.Arg(0)
+	var args []string
+	if len(flag.Args()) > 1 {
+		args = flag.Args()[1:]
+	}
+
+	cmd := exec.Command(exe, args...)
 	cmd.Env = append(cmd.Env, "PATH=/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin")
 	cmd.Stdout = os.Stdout
 	cmd.Stdin = os.Stdin
@@ -124,7 +130,7 @@ func main() {
 	l := logrus.New()
 	l.SetOutput(os.Stderr)
 	l.SetFormatter(&nested.Formatter{})
-	cmd.Stderr = l.WithField("component", "dockerd").Writer()
+	cmd.Stderr = l.WithField("component", "user-cmd").Writer()
 
 	go reap()
 	if !*useVsock {

@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"dagger.io/dagger"
 	nested "github.com/antonfisher/nested-logrus-formatter"
 	"github.com/cpuguy83/go-docker"
 	"github.com/cpuguy83/go-docker/container"
@@ -19,7 +18,6 @@ import (
 	"github.com/cpuguy83/go-docker/container/containerapi/mount"
 	"github.com/cpuguy83/go-docker/image"
 	"github.com/cpuguy83/qemu-micro-env/cmd/entrypoint/vmconfig"
-	"github.com/cpuguy83/qemu-micro-env/flags"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
@@ -38,7 +36,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), unix.SIGINT, unix.SIGTERM)
 	defer cancel()
 	if err := do(ctx); err != nil {
-		logrus.Fatal(err)
+		logrus.Fatalf("%+v", err)
 	}
 }
 
@@ -49,12 +47,7 @@ func do(ctx context.Context) error {
 	debug := flag.Bool("debug", false, "enable debug logging")
 	stateDirFl := flag.String("state-dir", "_output/", "directory to use for state files (socket, image, etc)")
 
-	mountSpecFl := flags.NewMountSpec(&mount.Mount{Type: mount.TypeVolume, Source: "qemu-micro-env-dagger-state"})
-	flags.AddMountSpecFlag(flag.CommandLine, mountSpecFl, "dagger-cache-mount")
-
 	flag.Parse()
-
-	cacheMount := mountSpecFl.AsMount()
 
 	logrus.SetOutput(os.Stderr)
 	logrus.SetFormatter(&logFormatter{&nested.Formatter{}})
@@ -68,34 +61,26 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("invalid cgroup version: %d", cfg.CgroupVersion)
 	}
 
+	imgTar := flag.Arg(1)
+	var f *os.File
+	switch imgTar {
+	case "", "-":
+		f = os.Stdin
+	default:
+		var err error
+		f, err = os.Open(imgTar)
+		if err != nil {
+			return fmt.Errorf("failed to open image tar: %w", err)
+		}
+	}
+	defer f.Close()
+
+	docker := docker.NewClient()
+
 	l := logrus.New()
 	l.SetFormatter(&nested.Formatter{})
 	l.SetOutput(os.Stderr)
 	l.SetLevel(logrus.StandardLogger().Level)
-
-	docker := docker.NewClient()
-
-	client, cleanup, err := getDaggerClient(ctx, docker, l, cacheMount)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-
-	img, err := RunnerImg(ctx, client, cfg)
-	if err != nil {
-		return err
-	}
-
-	imgTar := filepath.Join(*stateDirFl, "qemu-img.tar")
-	if _, err := img.Export(ctx, imgTar); err != nil {
-		return err
-	}
-
-	f, err := os.Open(imgTar)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
 
 	var imageID string
 	l.Info("Loading image into docker...")
@@ -322,81 +307,4 @@ func attachPipes(ctx context.Context, c *container.Container) error {
 	})
 
 	return eg.Wait()
-}
-
-func getDaggerClient(ctx context.Context, docker *docker.Client, l *logrus.Logger, cacheMount flags.Optional[mount.Mount]) (_ *dagger.Client, cleanup func(), retErr error) {
-	logOpt := dagger.WithLogOutput(l.WithField("component", "builder").WriterLevel(logrus.DebugLevel))
-	cleanup = func() {}
-	if docker == nil || os.Getenv("_EXPERIMENTAL_DAGGER_RUNNER_HOST") != "" {
-		client, err := dagger.Connect(ctx, logOpt)
-		return client, cleanup, err
-	}
-
-	daggerImgRef := image.Remote{Host: "registry.dagger.io", Locator: "engine", Tag: "v0.4.0"}
-	if err := docker.ImageService().Pull(ctx, daggerImgRef); err != nil {
-		return nil, nil, fmt.Errorf("error pulling engine image: %w", err)
-	}
-
-	var mounts []mount.Mount
-	if cacheMount.IsSome() {
-		mnt := cacheMount.Unwrap()
-		if mnt.Target == "" {
-			mnt.Target = "/var/lib/dagger"
-		}
-		mounts = append(mounts, mnt)
-	}
-
-	const cacheConfigEnvName = "_EXPERIMENTAL_DAGGER_CACHE_CONFIG"
-
-	ctr, err := docker.ContainerService().Create(ctx, daggerImgRef.String(),
-		container.WithCreateHostConfig(
-			containerapi.HostConfig{
-				Privileged: true,
-				Mounts:     mounts,
-			},
-		),
-		func(cfg *container.CreateConfig) {
-			if v, ok := os.LookupEnv(cacheConfigEnvName); ok {
-				cfg.Spec.Config.Env = append(cfg.Spec.Config.Env, cacheConfigEnvName+"="+v)
-			}
-		},
-	)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error creating dagger container: %w", err)
-	}
-
-	cleanup = func() {
-		if err := docker.ContainerService().Remove(context.Background(), ctr.ID(), container.WithRemoveForce); err != nil {
-			l.WithError(err).Warn("could not remove dagger container")
-		}
-	}
-	defer func() {
-		if retErr != nil {
-			docker.ImageService().Remove(context.Background(), daggerImgRef.String())
-			cleanup()
-		}
-	}()
-
-	if l.GetLevel() >= logrus.DebugLevel {
-		stderr, err := ctr.StderrPipe(ctx)
-		if err != nil {
-			l.WithError(err).Warn("could not get engine stderr pipe")
-		} else {
-			defer stderr.Close()
-			go func() {
-				io.Copy(l.WithField("component", "engine").WriterLevel(logrus.DebugLevel), stderr)
-			}()
-		}
-	}
-	if err := ctr.Start(ctx); err != nil {
-		return nil, cleanup, fmt.Errorf("error starting dagger container: %w", err)
-	}
-
-	os.Setenv("_EXPERIMENTAL_DAGGER_RUNNER_HOST", "docker-container://"+ctr.ID())
-	client, err := dagger.Connect(ctx)
-	if err != nil {
-		return nil, cleanup, err
-	}
-
-	return client, cleanup, nil
 }

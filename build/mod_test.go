@@ -2,11 +2,14 @@ package build
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
+
+	bkclient "github.com/moby/buildkit/client"
 )
 
 func TestBuildMod(t *testing.T) {
+	ctx := context.Background()
+
 	for name, builder := range Modules() {
 		name := name
 		builder := builder
@@ -14,19 +17,32 @@ func TestBuildMod(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			f, err := builder(client)
+			f, err := builder()
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			dir := t.TempDir()
-			ok, err := f.Export(context.Background(), filepath.Join(dir, name))
+			def, err := f.Marshal(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !ok {
-				t.Fatal("failed to export init module")
+
+			ch := make(chan *bkclient.SolveStatus)
+			done := make(chan struct{})
+			go func() {
+				for s := range ch {
+					for _, v := range s.Logs {
+						t.Log("\n" + string(v.Data))
+					}
+				}
+				close(done)
+			}()
+
+			_, err = client.Solve(ctx, def, bkclient.SolveOpt{}, ch)
+			if err != nil {
+				t.Fatal(err)
 			}
+			<-done
 		})
 	}
 }

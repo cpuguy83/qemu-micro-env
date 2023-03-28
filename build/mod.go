@@ -3,12 +3,15 @@ package build
 import (
 	"fmt"
 	gofs "io/fs"
+	"path/filepath"
 
-	"dagger.io/dagger"
 	"github.com/cpuguy83/qemu-micro-env/cmd"
+	"github.com/moby/buildkit/client/llb"
 )
 
-type GoModuleBuildFn func(*dagger.Client) (*dagger.File, error)
+var GoImageRef = "golang:1.20"
+
+type GoModuleBuildFn func(...BuildModOption) (llb.State, error)
 
 func Modules() map[string]GoModuleBuildFn {
 	return map[string]GoModuleBuildFn{
@@ -20,6 +23,7 @@ func Modules() map[string]GoModuleBuildFn {
 const (
 	initMod       = "init"
 	entrypointMod = "entrypoint"
+	runnerMod     = "runner"
 )
 
 func rewriteGoMod(v string) string {
@@ -32,40 +36,99 @@ func rewriteGoMod(v string) string {
 	return v
 }
 
-func BuildMod(client *dagger.Client, dir *dagger.Directory, name, p string) (*dagger.File, error) {
-	return client.Container().
-		From("golang:1.20").
-		WithMountedDirectory("/opt/build", dir).
-		WithWorkdir("/opt/build").
-		WithMountedCache("/root/.cache/go-build", client.CacheVolume("go-build-cache")).
-		WithMountedCache("/go/pkg/mod", client.CacheVolume("go-mod-cache")).
-		WithEnvVariable("CGO_ENABLED", "0").
-		WithExec([]string{"go", "build", "-o", name, p}).
-		File("/opt/build/" + name), nil
+type BuildModConfig struct {
+	OutputPath string
+}
+
+func WithOutputPath(p string) BuildModOption {
+	return func(cfg *BuildModConfig) {
+		cfg.OutputPath = p
+	}
+}
+
+type BuildModOption func(*BuildModConfig)
+
+func buildMod(modSource llb.State, name, p, target string) (llb.State, error) {
+	img := llb.Image(GoImageRef).File(llb.Mkdir("/opt/build", 0755, llb.WithParents(true)))
+
+	st := img.Run(
+		llb.AddMount("/root/.cache/go-build", llb.Scratch(), llb.AsPersistentCacheDir("go-build-cache", llb.CacheMountShared)),
+		llb.AddMount("/go/pkg/mod", llb.Scratch(), llb.AsPersistentCacheDir("go-mod-cache", llb.CacheMountShared)),
+		llb.AddMount("/opt/build", modSource),
+		llb.AddEnv("CGO_ENABLED", "0"),
+		llb.Args([]string{"/bin/sh", "-c", "cd /opt/build && /usr/local/go/bin/go build -o /tmp/" + name + " " + p}),
+	).Root()
+
+	return llb.Scratch().File(llb.Copy(st, "/tmp/"+name, filepath.Join("/", p))), nil
 }
 
 // InitModule builds the "init" binary which is used as the VM init
-func InitModule(client *dagger.Client) (*dagger.File, error) {
-	dir, err := gofs.Sub(cmd.Source(), "init")
-	if err != nil {
-		return nil, err
+func InitModule(opts ...BuildModOption) (llb.State, error) {
+	var cfg BuildModConfig
+	for _, o := range opts {
+		o(&cfg)
 	}
-	modDir, err := GoFSToDagger(dir, client.Directory(), rewriteGoMod)
-	if err != nil {
-		return nil, fmt.Errorf("could not convert directory to dagger directory: %w", err)
+
+	if cfg.OutputPath == "" {
+		cfg.OutputPath = "/sbin/init"
 	}
-	return BuildMod(client.Pipeline(initMod), modDir, initMod, ".")
+
+	dir, err := gofs.Sub(cmd.Source(), initMod)
+	if err != nil {
+		return llb.State{}, err
+	}
+
+	modDir, err := GoFSToLLB(dir, rewriteGoMod)
+	if err != nil {
+		return llb.State{}, fmt.Errorf("could not convert in-memory fs to llb: %w", err)
+	}
+
+	return buildMod(modDir, initMod, ".", cfg.OutputPath)
 }
 
 // EntrypointModule builds the "entrypoint" binary which is used as the container entrypoint
-func EntrypointModule(client *dagger.Client) (*dagger.File, error) {
-	dir, err := gofs.Sub(cmd.Source(), "entrypoint")
-	if err != nil {
-		return nil, err
+func EntrypointModule(opts ...BuildModOption) (llb.State, error) {
+	var cfg BuildModConfig
+	for _, o := range opts {
+		o(&cfg)
 	}
-	modDir, err := GoFSToDagger(dir, client.Directory(), rewriteGoMod)
-	if err != nil {
-		return nil, fmt.Errorf("could not convert directory to dagger directory: %w", err)
+
+	if cfg.OutputPath == "" {
+		cfg.OutputPath = "/entrypoint"
 	}
-	return BuildMod(client.Pipeline(entrypointMod), modDir, entrypointMod, "./cmd")
+
+	dir, err := gofs.Sub(cmd.Source(), entrypointMod)
+	if err != nil {
+		return llb.State{}, err
+	}
+
+	modDir, err := GoFSToLLB(dir, rewriteGoMod)
+	if err != nil {
+		return llb.State{}, fmt.Errorf("could not convert in-memory fs to llb: %w", err)
+	}
+
+	return buildMod(modDir, entrypointMod, "./cmd", cfg.OutputPath)
+}
+
+func RunnerModule(opts ...BuildModOption) (llb.State, error) {
+	var cfg BuildModConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+
+	if cfg.OutputPath == "" {
+		cfg.OutputPath = "/runner"
+	}
+
+	dir, err := gofs.Sub(cmd.Source(), runnerMod)
+	if err != nil {
+		return llb.State{}, err
+	}
+
+	modDir, err := GoFSToLLB(dir, rewriteGoMod)
+	if err != nil {
+		return llb.State{}, fmt.Errorf("could not convert in-memory fs to llb: %w", err)
+	}
+
+	return buildMod(modDir, runnerMod, ".", cfg.OutputPath)
 }

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"dagger.io/dagger"
+	"github.com/moby/buildkit/client/llb"
 )
 
 type KernelVersion struct {
@@ -76,42 +76,65 @@ func ParseKernelVersion(version string) (KernelVersion, error) {
 	}, nil
 }
 
-func GetKernelSource(client *dagger.Client, version string) (*dagger.File, error) {
+func GetKernelSource(version string) (File, error) {
 	ver, err := ParseKernelVersion(version)
 	if err != nil {
-		return nil, err
+		return File{}, err
 	}
 
 	const (
 		rcPattern = "https://git.kernel.org/torvalds/t/linux-%d.%d-rc%d.tar.gz"
 		gaPattern = "https://cdn.kernel.org/pub/linux/kernel/v%d.x/linux-%s.tar.gz"
 	)
+	var url string
 	if ver.IsRC {
-		return client.HTTP(fmt.Sprintf(rcPattern, ver.Major, ver.Minor, ver.RC)), nil
+		url = fmt.Sprintf(rcPattern, ver.Major, ver.Minor, ver.RC)
+	} else {
+		url = fmt.Sprintf(gaPattern, ver.Major, version)
 	}
-	return client.HTTP(fmt.Sprintf(gaPattern, ver.Major, version)), nil
+	return NewFile(llb.HTTP(url, llb.Filename("kernel.tar.gz")), "/kernel.tar.gz"), nil
 }
 
-func BuildKernel(container *dagger.Container, source, config *dagger.File) *dagger.File {
-	version := `
+func BuildKernel(container llb.State, source File, config *File) File {
+	const version = `
 .PHONY: printversion
 printversion:
 	@echo $(KERNELVERSION)
 `
-	ctr := container.
-		WithMountedFile("/opt/src/kernel/kernel.tar.gz", source).
-		WithWorkdir("/opt/src/kernel").
-		WithExec([]string{"/bin/sh", "-c", "mkdir src && tar -C src --strip-components=1 -xzf kernel.tar.gz"}).
-		WithWorkdir("/opt/src/kernel/src").
-		WithExec([]string{"/bin/sh", "-c", "cat - >> Makefile"}, dagger.ContainerWithExecOpts{Stdin: version})
 
+	ctr := container.
+		AddEnv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin").
+		Run(llb.Shlex("mkdir -p /opt/src/kernel")).
+		Dir("/opt/src/kernel").
+		Run(
+			llb.AddMount("/opt/src/kernel.tar.gz", source.State(), llb.Readonly, llb.SourcePath("/kernel.tar.gz")),
+			llb.Shlex("tar -C /opt/src/kernel --strip-components=1 -xzf /opt/src/kernel.tar.gz"),
+		).
+		File(llb.Mkfile("/tmp/version.mk", 0644, []byte(version))).
+		Run(llb.Args([]string{"/bin/sh", "-c", "cat /tmp/version.mk >> /opt/src/kernel/Makefile"}))
+
+	var opts []llb.RunOption
 	if config == nil {
-		ctr = ctr.WithExec([]string{"/bin/sh", "-c", "make tinyconfig"})
+		ctr = ctr.Run(llb.Args([]string{"/bin/sh", "-c", "make tinyconfig"}))
 	} else {
-		ctr = ctr.WithMountedFile("/opt/src/kernel/src/.config", config)
+		opts = append(opts, llb.AddMount("/opt/src/kernel/src/.config", config.State(), llb.Readonly, llb.SourcePath(config.Path())))
 	}
 
-	return ctr.WithExec([]string{"/bin/sh", "-c", "make -j$(nproc) && make install"}).
-		WithExec([]string{"/bin/sh", "-c", `mv /boot/vmlinuz-"$(make printversion)" /boot/vmlinuz`}).
-		File("/boot/vmlinuz")
+	opts = append(opts, llb.Args([]string{
+		"/bin/sh", "-c",
+		`make -j$(nproc) && make install && mv /boot/vmlinuz-"$(make printversion)" /boot/vmlinuz`,
+	}))
+	return NewFile(ctr.Run(opts...).Root(), "/boot/vmlinuz")
+}
+
+func KernelBuildBase() llb.State {
+	return llb.Image(JammyRef).
+		AddEnv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin").
+		AddEnv("DEBIAN_FRONTEND", "noninteractive").
+		Run(
+			llb.Args([]string{
+				"/bin/sh", "-c",
+				"apt-get update && apt-get install -y build-essential bc libncurses-dev bison flex libssl-dev libelf-dev",
+			}),
+		).Root()
 }
