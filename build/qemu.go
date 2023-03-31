@@ -10,9 +10,13 @@ func QcowFrom(rootfs llb.State, size int64) File {
 	sizeStr := strconv.FormatInt(size, 10)
 	rootfsMount := llb.AddMount("/tmp/rootfs", rootfs)
 	return NewFile(QemuBase().
-		Run(rootfsMount, llb.Args([]string{"/usr/bin/truncate", "-s", sizeStr, "/tmp/rootfs.img"})).
-		Run(rootfsMount, llb.Args([]string{"/sbin/mkfs.ext4", "-d", "/tmp/rootfs", "/tmp/rootfs.img"})).
-		Run(rootfsMount, llb.Args([]string{"/usr/bin/qemu-img", "convert", "/tmp/rootfs.img", "-O", "qcow2", "/tmp/rootfs.qcow2"})).Root(),
+		Run(rootfsMount,
+			llb.Args([]string{"/bin/sh", "-ec", ` 
+			truncate -s` + sizeStr + ` /tmp/rootfs.img
+			mkfs.ext4 -d /tmp/rootfs /tmp/rootfs.img
+			qemu-img convert /tmp/rootfs.img -O qcow2 /tmp/rootfs.qcow2
+			rm /tmp/rootfs.img
+		`})).Root(),
 		"/tmp/rootfs.qcow2")
 }
 

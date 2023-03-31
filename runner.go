@@ -2,127 +2,47 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"strings"
 
 	nested "github.com/antonfisher/nested-logrus-formatter"
 	"github.com/cpuguy83/go-docker"
 	"github.com/cpuguy83/go-docker/container"
 	"github.com/cpuguy83/go-docker/container/containerapi"
 	"github.com/cpuguy83/go-docker/container/containerapi/mount"
-	"github.com/cpuguy83/go-docker/image"
+	"github.com/cpuguy83/go-docker/transport"
 	"github.com/cpuguy83/qemu-micro-env/cmd/entrypoint/vmconfig"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/sys/unix"
 )
 
-type logFormatter struct {
-	base *nested.Formatter
+func runnerFlags(set *flag.FlagSet, cfg *config) {
+	set.StringVar(&cfg.StateDir, "state-dir", "_output/", "directory to use for state files (socket, image, etc)")
+	vmconfig.AddVMFlags(set, &cfg.VM)
 }
 
-func (f *logFormatter) Format(entry *logrus.Entry) ([]byte, error) {
-	entry.Data["component"] = "runner"
-	return f.base.Format(entry)
-}
+func doRunner(ctx context.Context, cfg config, tr transport.Doer) error {
+	logrus.SetFormatter(&logFormatter{&nested.Formatter{}, "runner"})
 
-func main() {
-	ctx, cancel := signal.NotifyContext(context.Background(), unix.SIGINT, unix.SIGTERM)
-	defer cancel()
-	if err := do(ctx); err != nil {
-		logrus.Fatalf("%+v", err)
-	}
-}
-
-func do(ctx context.Context) error {
-	var cfg vmconfig.VMConfig
-	vmconfig.AddVMFlags(flag.CommandLine, &cfg)
-
-	debug := flag.Bool("debug", false, "enable debug logging")
-	stateDirFl := flag.String("state-dir", "_output/", "directory to use for state files (socket, image, etc)")
-
-	flag.Parse()
-
-	logrus.SetOutput(os.Stderr)
-	logrus.SetFormatter(&logFormatter{&nested.Formatter{}})
-	if *debug {
-		logrus.SetLevel(logrus.DebugLevel)
-	}
-
-	switch cfg.CgroupVersion {
+	switch cfg.VM.CgroupVersion {
 	case 1, 2:
 	default:
-		return fmt.Errorf("invalid cgroup version: %d", cfg.CgroupVersion)
+		return fmt.Errorf("invalid cgroup version: %d", cfg.VM.CgroupVersion)
 	}
 
-	imgTar := flag.Arg(1)
-	var f *os.File
-	switch imgTar {
-	case "", "-":
-		f = os.Stdin
-	default:
-		var err error
-		f, err = os.Open(imgTar)
-		if err != nil {
-			return fmt.Errorf("failed to open image tar: %w", err)
-		}
-	}
-	defer f.Close()
+	docker := docker.NewClient(docker.WithTransport(tr))
 
-	docker := docker.NewClient()
-
-	l := logrus.New()
-	l.SetFormatter(&nested.Formatter{})
-	l.SetOutput(os.Stderr)
-	l.SetLevel(logrus.StandardLogger().Level)
-
-	var imageID string
-	l.Info("Loading image into docker...")
-	if err := docker.ImageService().Load(ctx, f, func(cfg *image.LoadConfig) error {
-		cfg.ConsumeProgress = func(ctx context.Context, rdr io.Reader) error {
-			dec := json.NewDecoder(rdr)
-			var res struct {
-				Stream string `json:"stream"`
-			}
-
-			for {
-				err := dec.Decode(&res)
-				if err != nil {
-					if err == io.EOF {
-						return nil
-					}
-					return err
-				}
-
-				res.Stream = strings.TrimSuffix(res.Stream, "\n")
-				_, id, found := strings.Cut(res.Stream, " ID: ")
-				if !found {
-					continue
-				}
-				imageID = id
-				io.Copy(io.Discard, rdr)
-				return nil
-			}
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
-
-	stateDir := *stateDirFl
+	stateDir := cfg.StateDir
 	if err := os.MkdirAll(stateDir, 0750); err != nil {
 		return err
 	}
 
-	if !cfg.UseVsock {
+	if !cfg.VM.UseVsock {
 		// add the ssh port forward if we're not using vsock
-		cfg.PortForwards = append([]int{22}, cfg.PortForwards...)
+		cfg.VM.PortForwards = append([]int{22}, cfg.VM.PortForwards...)
 	}
 
 	if !filepath.IsAbs(stateDir) {
@@ -133,11 +53,11 @@ func do(ctx context.Context) error {
 		stateDir = filepath.Join(cwd, stateDir)
 	}
 
-	portForwards := cfg.PortForwards
-	noKVM := cfg.NoKVM
-	useVosck := cfg.UseVsock
-	args := append([]string{"/usr/local/bin/docker-entrypoint"}, cfg.AsFlags()...)
-	c, err := docker.ContainerService().Create(ctx, imageID, func(cfg *container.CreateConfig) {
+	portForwards := cfg.VM.PortForwards
+	noKVM := cfg.VM.NoKVM
+	useVosck := cfg.VM.UseVsock
+	args := append([]string{entrypointPath}, cfg.VM.AsFlags()...)
+	c, err := docker.ContainerService().Create(ctx, cfg.ImageRef, func(cfg *container.CreateConfig) {
 		cfg.Spec.OpenStdin = true
 		cfg.Spec.AttachStdin = true
 		cfg.Spec.AttachStdout = true

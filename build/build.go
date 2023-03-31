@@ -14,7 +14,7 @@ func (f File) Path() string {
 }
 
 func (f File) State() llb.State {
-	return f.st
+	return llb.Scratch().File(llb.Copy(f.st, f.p, f.p, createParentsCopyOption{}))
 }
 
 func NewFile(st llb.State, p string) File {
@@ -39,4 +39,16 @@ func (s *DiskImageSpec) Build() File {
 	}
 	st := llb.Merge(states)
 	return QcowFrom(st, s.Size)
+}
+
+type createParentsCopyOption struct{}
+
+func (createParentsCopyOption) SetCopyOption(opt *llb.CopyInfo) {
+	opt.CreateDestPath = true
+}
+
+type copyDirContentsOnly struct{}
+
+func (copyDirContentsOnly) SetCopyOption(opt *llb.CopyInfo) {
+	opt.CopyDirContentsOnly = true
 }

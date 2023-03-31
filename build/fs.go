@@ -18,9 +18,12 @@ func GoFSToLLB(fs gofs.FS, rewrite RewriteFn) (llb.State, error) {
 			return err
 		}
 
-		rewritten := rewrite(path)
-		if rewritten == "" {
-			return nil
+		rewritten := path
+		if rewrite != nil {
+			rewritten = rewrite(path)
+			if rewritten == "" {
+				return nil
+			}
 		}
 
 		if path == "." {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -114,8 +115,6 @@ func main() {
 
 	setupNetwork()
 
-	logrus.Info(os.Environ())
-
 	exe := flag.Arg(0)
 	var args []string
 	if len(flag.Args()) > 1 {
@@ -130,7 +129,7 @@ func main() {
 	l := logrus.New()
 	l.SetOutput(os.Stderr)
 	l.SetFormatter(&nested.Formatter{})
-	cmd.Stderr = l.WithField("component", "user-cmd").Writer()
+	cmd.Stderr = l.WithField("component", "vm:"+filepath.Base(exe)).Writer()
 
 	go reap()
 	if !*useVsock {

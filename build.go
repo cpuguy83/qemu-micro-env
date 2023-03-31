@@ -9,44 +9,21 @@ import (
 	"github.com/cpuguy83/qemu-micro-env/build"
 	"github.com/docker/go-units"
 	"github.com/moby/buildkit/client/llb"
-	"github.com/pkg/errors"
 )
-
-func WithInit(rootfs llb.State, path string) (llb.State, error) {
-	if path == "" {
-		path = "/sbin/init"
-	}
-
-	f, err := build.InitModule()
-	if err != nil {
-		return rootfs, err
-	}
-
-	llb.Merge([]llb.State{rootfs, f})
-	return llb.Merge([]llb.State{rootfs, f}), nil
-}
 
 const (
 	defaultQcowSize = "10GB"
 	entrypointPath  = "/usr/local/bin/docker-entrypoint"
+	initPath        = "/sbin/custom-init"
 )
 
 func mkImage(ctx context.Context, spec *build.DiskImageSpec) (llb.State, error) {
-	var err error
-	spec.Rootfs, err = WithInit(spec.Rootfs, "/sbin/custom-init")
+	entrypoint, err := EntrypointModule(WithOutputPath(entrypointPath))
 	if err != nil {
-		return llb.Scratch(), errors.WithStack(err)
-	}
-	qcow := spec.Build()
-
-	entrypoint, err := build.EntrypointModule(build.WithOutputPath(entrypointPath))
-	if err != nil {
-		return llb.Scratch(), errors.WithStack(err)
+		return llb.Scratch(), err
 	}
 
-	spec.Rootfs = llb.Merge([]llb.State{spec.Rootfs, entrypoint})
-
-	return llb.Merge([]llb.State{build.QemuBase(), qcow.State(), spec.Kernel.Kernel.State(), spec.Kernel.Initrd.State()}), nil
+	return llb.Merge([]llb.State{build.QemuBase(), entrypoint, spec.Build().State(), spec.Kernel.Kernel.State(), spec.Kernel.Initrd.State()}), nil
 }
 
 func specFromFlags(ctx context.Context, cfg vmImageConfig) (*build.DiskImageSpec, error) {
@@ -54,6 +31,17 @@ func specFromFlags(ctx context.Context, cfg vmImageConfig) (*build.DiskImageSpec
 
 	if cfg.rootfs != "" {
 		spec.Rootfs = llb.Image(cfg.rootfs)
+	} else {
+		initMod, err := InitModule(WithOutputPath("/sbin/custom-init"))
+		if err != nil {
+			return nil, err
+		}
+
+		mobySt, err := build.GetMoby("")
+		if err != nil {
+			return nil, err
+		}
+		spec.Rootfs = llb.Merge([]llb.State{build.JammySpec().Rootfs, initMod, mobySt})
 	}
 
 	spec.Kernel.Kernel = kernelSpecToFile(ctx, cfg.kernel, spec.Rootfs, "/boot/vmlinuz")
