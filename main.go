@@ -11,7 +11,7 @@ import (
 
 	nested "github.com/antonfisher/nested-logrus-formatter"
 	"github.com/cpuguy83/go-docker"
-	"github.com/cpuguy83/qemu-micro-env/cmd/entrypoint/vmconfig"
+	"github.com/cpuguy83/qemu-micro-env/build/vmconfig"
 	"github.com/opencontainers/go-digest"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"

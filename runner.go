@@ -14,7 +14,7 @@ import (
 	"github.com/cpuguy83/go-docker/container/containerapi"
 	"github.com/cpuguy83/go-docker/container/containerapi/mount"
 	"github.com/cpuguy83/go-docker/transport"
-	"github.com/cpuguy83/qemu-micro-env/cmd/entrypoint/vmconfig"
+	"github.com/cpuguy83/qemu-micro-env/build/vmconfig"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 )

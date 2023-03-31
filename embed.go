@@ -8,7 +8,7 @@ import (
 	"github.com/moby/buildkit/client/llb"
 )
 
-//go:embed go.mod go.sum all:cmd/init all:cmd/entrypoint
+//go:embed go.mod go.sum all:cmd/init all:cmd/entrypoint all:build/vmconfig
 var src embed.FS
 
 var (
@@ -101,5 +101,5 @@ func EntrypointModule(opts ...BuildModOption) (llb.State, error) {
 		return llb.Scratch(), err
 	}
 
-	return build.Mod(st, entrypointMod, "./cmd/entrypoint/cmd", cfg.OutputPath), nil
+	return build.Mod(st, entrypointMod, "./cmd/entrypoint", cfg.OutputPath), nil
 }

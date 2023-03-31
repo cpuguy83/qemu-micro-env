@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	nested "github.com/antonfisher/nested-logrus-formatter"
-	"github.com/cpuguy83/qemu-micro-env/cmd/entrypoint/vmconfig"
+	"github.com/cpuguy83/qemu-micro-env/build/vmconfig"
 	"github.com/sirupsen/logrus"
 )
 

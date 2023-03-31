@@ -9,7 +9,7 @@ import (
 	nested "github.com/antonfisher/nested-logrus-formatter"
 	"github.com/cpuguy83/go-docker/buildkitopt"
 	"github.com/cpuguy83/go-docker/transport"
-	"github.com/cpuguy83/qemu-micro-env/cmd/entrypoint/vmconfig"
+	"github.com/cpuguy83/qemu-micro-env/build/vmconfig"
 	bkclient "github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/exporter/containerimage/exptypes"
 	"github.com/moby/buildkit/identity"
