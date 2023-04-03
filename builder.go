@@ -21,6 +21,8 @@ func buildFlags(set *flag.FlagSet, cfg *config) {
 	vmconfig.AddVMFlags(set, &cfg.VM)
 	set.StringVar(&cfg.ImageConfig.size, "qcow-size", defaultQcowSize, "Size for the created qcow image")
 	set.StringVar(&cfg.ImageConfig.rootfs, "rootfs", "", "Image to get a rootfs from. If empty will use the default rootfs.")
+	set.Var(&cfg.ImageConfig.kernel, "kernel", "kernel spec")
+	set.Var(&cfg.ImageConfig.initrd, "initrd", "initrd spec")
 }
 
 func doBuilder(ctx context.Context, cfg config, tr transport.Doer) (string, error) {
@@ -39,11 +41,11 @@ func doBuilder(ctx context.Context, cfg config, tr transport.Doer) (string, erro
 
 	img, err := mkImage(ctx, spec)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error building image LLB: %w", err)
 	}
 	def, err := img.Marshal(ctx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error marshaling LLB: %w", err)
 	}
 
 	ref := identity.NewID()
@@ -58,10 +60,11 @@ func doBuilder(ctx context.Context, cfg config, tr transport.Doer) (string, erro
 			Exports: []bkclient.ExportEntry{
 				{Type: "moby"},
 			},
-			Ref: ref,
+			Ref:       ref,
+			LocalDirs: map[string]string{hostKernelContext: "/"},
 		}, ch)
 		if err != nil {
-			return err
+			return fmt.Errorf("error solving: %w", err)
 		}
 		return nil
 	})
@@ -82,6 +85,7 @@ func doBuilder(ctx context.Context, cfg config, tr transport.Doer) (string, erro
 		for _, l := range logs {
 			logrus.Warn(l)
 		}
+
 		return "", err
 	}
 

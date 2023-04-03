@@ -14,11 +14,32 @@ func (f File) Path() string {
 }
 
 func (f File) State() llb.State {
-	return llb.Scratch().File(llb.Copy(f.st, f.p, f.p, createParentsCopyOption{}))
+	return llb.Scratch().File(llb.Copy(f.st, f.p, f.p, createParentsCopyOption{}, copyFollowSymlink{}))
+}
+
+func (f File) IsEmpty() bool {
+	return f.p == ""
 }
 
 func NewFile(st llb.State, p string) File {
 	return File{st: st, p: p}
+}
+
+type Directory struct {
+	st llb.State
+	p  string
+}
+
+func NewDirectory(st llb.State, p string) Directory {
+	return Directory{st: st, p: p}
+}
+
+func (d Directory) Path() string {
+	return d.p
+}
+
+func (d Directory) State() llb.State {
+	return llb.Scratch().File(llb.Copy(d.st, d.p, d.p, createParentsCopyOption{}, copyDirContentsOnly{}))
 }
 
 type Kernel struct {
@@ -34,7 +55,7 @@ type DiskImageSpec struct {
 
 func (s *DiskImageSpec) Build() File {
 	states := []llb.State{s.Rootfs, s.Kernel.Kernel.State()}
-	if s.Kernel.Initrd.Path() != "" {
+	if !s.Kernel.Initrd.IsEmpty() {
 		states = append(states, s.Kernel.Initrd.State())
 	}
 	st := llb.Merge(states)
@@ -51,4 +72,10 @@ type copyDirContentsOnly struct{}
 
 func (copyDirContentsOnly) SetCopyOption(opt *llb.CopyInfo) {
 	opt.CopyDirContentsOnly = true
+}
+
+type copyFollowSymlink struct{}
+
+func (copyFollowSymlink) SetCopyOption(opt *llb.CopyInfo) {
+	opt.FollowSymlinks = true
 }

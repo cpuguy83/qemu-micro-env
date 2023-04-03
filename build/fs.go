@@ -1,6 +1,7 @@
 package build
 
 import (
+	"fmt"
 	gofs "io/fs"
 
 	"github.com/moby/buildkit/client/llb"
@@ -47,5 +48,8 @@ func GoFSToLLB(fs gofs.FS, rewrite RewriteFn) (llb.State, error) {
 		st = st.File(llb.Mkfile(rewritten, fi.Mode(), dt))
 		return nil
 	})
-	return st, err
+	if err != nil {
+		return llb.Scratch(), fmt.Errorf("error walking embedded source dir: %w", err)
+	}
+	return st, nil
 }

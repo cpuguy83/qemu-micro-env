@@ -23,9 +23,9 @@ func (f *kernelSpecFlag) Set(s string) error {
 	if s == "" {
 		return nil
 	}
-	scheme, ref, ok := strings.Cut("://", s)
+	scheme, ref, ok := strings.Cut(s, "://")
 	if !ok {
-		return fmt.Errorf("invalid format, must be <scheme>://<ref>")
+		return fmt.Errorf("invalid format, must be <scheme>://<ref>: %s", s)
 	}
 	switch scheme {
 	case "rootfs", "file", "docker-image", "qcow", "":

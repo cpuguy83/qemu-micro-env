@@ -57,12 +57,14 @@ func doRunner(ctx context.Context, cfg config, tr transport.Doer) error {
 	noKVM := cfg.VM.NoKVM
 	useVosck := cfg.VM.UseVsock
 	args := append([]string{entrypointPath}, cfg.VM.AsFlags()...)
+	needsTTY := cfg.VM.DebugConsole
 	c, err := docker.ContainerService().Create(ctx, cfg.ImageRef, func(cfg *container.CreateConfig) {
 		cfg.Spec.OpenStdin = true
 		cfg.Spec.AttachStdin = true
 		cfg.Spec.AttachStdout = true
 		cfg.Spec.AttachStderr = true
 		cfg.Spec.HostConfig.AutoRemove = true
+		cfg.Spec.Tty = needsTTY
 
 		init := true
 		cfg.Spec.HostConfig.Init = &init
@@ -133,7 +135,7 @@ func doRunner(ctx context.Context, cfg config, tr transport.Doer) error {
 		return fmt.Errorf("error waiting for container: %w", err)
 	}
 
-	if err := attachPipes(ctx, c); err != nil {
+	if err := attachPipes(ctx, c, needsTTY); err != nil {
 		return err
 	}
 
@@ -187,7 +189,7 @@ func doRunner(ctx context.Context, cfg config, tr transport.Doer) error {
 	return nil
 }
 
-func attachPipes(ctx context.Context, c *container.Container) error {
+func attachPipes(ctx context.Context, c *container.Container, tty bool) error {
 	eg, ctx := errgroup.WithContext(ctx)
 
 	eg.Go(func() error {
@@ -202,17 +204,19 @@ func attachPipes(ctx context.Context, c *container.Container) error {
 		return nil
 	})
 
-	eg.Go(func() error {
-		stderr, err := c.StderrPipe(ctx)
-		if err != nil {
-			return err
-		}
-		go func() {
-			io.Copy(os.Stderr, stderr)
-			stderr.Close()
-		}()
-		return nil
-	})
+	if !tty {
+		eg.Go(func() error {
+			stderr, err := c.StderrPipe(ctx)
+			if err != nil {
+				return err
+			}
+			go func() {
+				io.Copy(os.Stderr, stderr)
+				stderr.Close()
+			}()
+			return nil
+		})
+	}
 
 	eg.Go(func() error {
 		stdin, err := c.StdinPipe(ctx)
