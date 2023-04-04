@@ -115,16 +115,24 @@ printversion:
 
 	var opts []llb.RunOption
 	if config == nil {
-		ctr = ctr.Run(llb.Args([]string{"/bin/sh", "-c", "make tinyconfig"}))
+		ctr = ctr.Run(llb.Args([]string{"/bin/sh", "-c", "make defconfig"})).
+			Run(llb.Args([]string{"/bin/sh", "-c", "make kvm_guest.config"})).
+			Run(llb.Args([]string{"/bin/sh", "-c", "make olddefconfig"}))
 	} else {
 		opts = append(opts, llb.AddMount("/opt/src/kernel/src/.config", config.State(), llb.Readonly, llb.SourcePath(config.Path())))
 	}
 
 	opts = append(opts, llb.Args([]string{
 		"/bin/sh", "-c",
-		`make -j$(nproc) && make install && mv /boot/vmlinuz-"$(make printversion)" /boot/vmlinuz`,
+		`make -j$(nproc) && make install`,
 	}))
-	return NewFile(ctr.Run(opts...).Root(), "/boot/vmlinuz")
+
+	opts = append(opts, llb.AddMount("/root/.cache/ccache", llb.Scratch(), llb.AsPersistentCacheDir("kernel-ccache", llb.CacheMountShared)))
+	opts = append(opts, llb.AddEnv("CC", "ccache gcc"))
+	ctr = ctr.Run(opts...).
+		Run(llb.Args([]string{"/bin/sh", "-c", "ln -s /boot/vmlinuz-$(make printversion) /boot/vmlinuz"}))
+
+	return NewFile(ctr.Root(), "/boot/vmlinuz")
 }
 
 func KernelBuildBase() llb.State {
@@ -134,7 +142,7 @@ func KernelBuildBase() llb.State {
 		Run(
 			llb.Args([]string{
 				"/bin/sh", "-c",
-				"apt-get update && apt-get install -y build-essential bc libncurses-dev bison flex libssl-dev libelf-dev",
+				"apt-get update && apt-get install -y build-essential bc libncurses-dev bison flex libssl-dev libelf-dev ccache",
 			}),
 		).Root()
 }
