@@ -33,7 +33,8 @@ func (f *logFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 
 func main() {
 	cgVerP := flag.Int("cgroup-version", 2, "cgroup version to use (1 or 2)")
-	debugConsole := flag.Bool("debug", false, "Get shell before init is run")
+	debugConsole := flag.Bool("debug-console", false, "Get shell before init is run")
+	debug := flag.Bool("debug", false, "Get shell before init is run")
 	authorizedKeysPipe := flag.String("authorized-keys-pipe", "/dev/virtio-ports/authorized_keys", "Pipe to read authorized keys from")
 	useVsock := flag.Bool("vsock", false, "Use vsock to proxy docker socket")
 
@@ -48,6 +49,10 @@ func main() {
 	logrus.SetFormatter(&logFormatter{&nested.Formatter{}})
 
 	flag.Parse()
+
+	if *debug {
+		logrus.SetLevel(logrus.DebugLevel)
+	}
 
 	switch flag.Arg(0) {
 	case "_check":
@@ -112,8 +117,7 @@ func main() {
 	default:
 		panic("invalid value for cgroup-version")
 	}
-
-	setupNetwork()
+	logrus.Info("mounted cgroups")
 
 	exe := flag.Arg(0)
 	var args []string
@@ -140,6 +144,8 @@ func main() {
 	}
 
 	fmt.Fprintln(os.Stderr, "Welcome to the vm!")
+
+	logrus.Debug("starting command")
 
 	if err := cmd.Run(); err != nil {
 		panic(err)
@@ -251,6 +257,7 @@ func reap() {
 }
 
 func ssh() {
+	logrus.Debug("starting ssh")
 	cmd := exec.Command("/usr/sbin/sshd", "-D")
 	cmd.Stdout = os.Stdout
 

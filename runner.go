@@ -15,6 +15,7 @@ import (
 	"github.com/cpuguy83/go-docker/container/containerapi/mount"
 	"github.com/cpuguy83/go-docker/transport"
 	"github.com/cpuguy83/qemu-micro-env/build/vmconfig"
+	"github.com/moby/term"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 )
@@ -57,7 +58,11 @@ func doRunner(ctx context.Context, cfg config, tr transport.Doer) error {
 	noKVM := cfg.VM.NoKVM
 	useVosck := cfg.VM.UseVsock
 	args := append([]string{entrypointPath}, cfg.VM.AsFlags()...)
-	needsTTY := cfg.VM.DebugConsole
+	if cfg.Debug {
+		args = append(args, "--debug")
+	}
+
+	needsTTY := term.IsTerminal(os.Stdin.Fd())
 	c, err := docker.ContainerService().Create(ctx, cfg.ImageRef, func(cfg *container.CreateConfig) {
 		cfg.Spec.OpenStdin = true
 		cfg.Spec.AttachStdin = true

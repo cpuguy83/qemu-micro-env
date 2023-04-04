@@ -12,8 +12,8 @@ require (
 	github.com/creack/pty v1.1.18
 	github.com/docker/go-units v0.5.0
 	github.com/moby/buildkit v0.11.5
+	github.com/moby/term v0.0.0-20221205130635-1aeaba878587
 	github.com/opencontainers/go-digest v1.0.0
-	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.0
 	golang.org/x/crypto v0.7.0
 	golang.org/x/sync v0.1.0
@@ -21,6 +21,7 @@ require (
 )
 
 require (
+	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 // indirect
 	github.com/Microsoft/go-winio v0.6.0 // indirect
 	github.com/containerd/containerd v1.7.0 // indirect
 	github.com/containerd/continuity v0.3.1-0.20230206214859-2a963a2f56e8 // indirect
@@ -40,6 +41,7 @@ require (
 	github.com/moby/patternmatcher v0.5.0 // indirect
 	github.com/moby/sys/signal v0.7.0 // indirect
 	github.com/opencontainers/image-spec v1.1.0-rc2.0.20221005185240-3a7f492d3f1b // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/tonistiigi/fsutil v0.0.0-20230214225802-a3696a2f1f27 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.40.0 // indirect
 	go.opentelemetry.io/otel v1.14.0 // indirect
