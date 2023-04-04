@@ -83,7 +83,7 @@ func getKernel(cfg vmImageConfig) (build.Kernel, error) {
 		switch cfg.kernel.scheme {
 		case "rootfs":
 			k.Kernel = build.NewFile(llb.Local(hostKernelContext, llb.IncludePatterns([]string{cfg.kernel.ref}), llb.FollowPaths([]string{cfg.kernel.ref})), cfg.kernel.ref)
-		case "source":
+		case "version":
 			src, err := build.GetKernelSource(cfg.kernel.ref)
 			if err != nil {
 				return k, fmt.Errorf("error getting kernel source: %w", err)
