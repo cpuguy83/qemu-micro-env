@@ -37,21 +37,15 @@ func QcowDiff(qcow File) File {
 }
 
 func QemuBase() llb.State {
-	return llb.Image("alpine:3.17").
-		Run(
-			llb.AddMount("/var/cache/apk", llb.Scratch(), llb.AsPersistentCacheDir("var-cache-apk", llb.CacheMountShared)),
-			llb.Args(
-				[]string{"/sbin/apk", "add",
-					"qemu",
-					"qemu-tools",
-					"qemu-img",
-					"qemu-system-x86_64",
-					"qemu-system-aarch64",
-					"qemu-system-arm",
-					"bash",
-					"openssh-client",
-					"socat",
-					"e2fsprogs",
-				},
-			)).Root()
+	return llb.Image(JammyRef).
+		Run(llb.Args([]string{
+			"/bin/sh", "-c",
+			`apt-get update && apt-get install -y \
+				qemu \
+				qemu-system \
+				bash \
+				openssh-client \
+				socat \
+				e2fsprogs \
+		`})).Root()
 }

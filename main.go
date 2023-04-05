@@ -23,6 +23,7 @@ type config struct {
 	StateDir    string
 	ImageConfig vmImageConfig
 	ImageRef    string
+	Prune       bool
 }
 
 type logFormatter struct {

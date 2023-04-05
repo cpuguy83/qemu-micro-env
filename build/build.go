@@ -1,8 +1,12 @@
 package build
 
 import (
+	"strings"
+
 	"github.com/moby/buildkit/client/llb"
 )
+
+var UseMergeOp = true
 
 type File struct {
 	st llb.State
@@ -14,7 +18,7 @@ func (f File) Path() string {
 }
 
 func (f File) State() llb.State {
-	return llb.Scratch().File(llb.Copy(f.st, f.p, f.p, createParentsCopyOption{}, copyFollowSymlink{}))
+	return llb.Scratch().File(llb.Copy(f.st, f.p, f.p, createParentsCopyOption{}, copyFollowSymlink{}, copyWithGlob{f.p}))
 }
 
 func (f File) IsEmpty() bool {
@@ -39,12 +43,18 @@ func (d Directory) Path() string {
 }
 
 func (d Directory) State() llb.State {
-	return llb.Scratch().File(llb.Copy(d.st, d.p, d.p, createParentsCopyOption{}, copyDirContentsOnly{}))
+	return llb.Scratch().File(llb.Copy(d.st, d.p, d.p, createParentsCopyOption{}, copyDirContentsOnly{}, copyFollowSymlink{}))
+}
+
+func (d Directory) IsEmpty() bool {
+	return d.p == ""
 }
 
 type Kernel struct {
-	Initrd File
-	Kernel File
+	Initrd  File
+	Kernel  File
+	Modules Directory
+	Config  File
 }
 
 type DiskImageSpec struct {
@@ -54,11 +64,20 @@ type DiskImageSpec struct {
 }
 
 func (s *DiskImageSpec) Build() File {
-	states := []llb.State{s.Rootfs, s.Kernel.Kernel.State()}
+	st := s.Rootfs.File(llb.Copy(s.Kernel.Kernel.State(), s.Kernel.Kernel.Path(), "/boot/vmlinuz", createParentsCopyOption{}))
+
 	if !s.Kernel.Initrd.IsEmpty() {
-		states = append(states, s.Kernel.Initrd.State())
+		st = st.File(llb.Copy(s.Kernel.Initrd.State(), s.Kernel.Initrd.Path(), "/boot/initrd.img", createParentsCopyOption{}))
 	}
-	st := llb.Merge(states)
+
+	if !s.Kernel.Modules.IsEmpty() {
+		st = st.File(llb.Copy(s.Kernel.Modules.State(), s.Kernel.Modules.Path(), "/lib/modules", createParentsCopyOption{}, copyDirContentsOnly{}, copyFollowSymlink{}))
+	}
+
+	if !s.Kernel.Config.IsEmpty() {
+		st = st.File(llb.Copy(s.Kernel.Config.State(), s.Kernel.Config.Path(), "/boot/config", createParentsCopyOption{}))
+	}
+
 	return QcowFrom(st, s.Size)
 }
 
@@ -78,4 +97,13 @@ type copyFollowSymlink struct{}
 
 func (copyFollowSymlink) SetCopyOption(opt *llb.CopyInfo) {
 	opt.FollowSymlinks = true
+}
+
+type copyWithGlob struct {
+	p string
+}
+
+func (c copyWithGlob) SetCopyOption(opt *llb.CopyInfo) {
+	opt.AllowWildcard = strings.Contains(c.p, "*")
+	opt.AllowEmptyWildcard = true
 }

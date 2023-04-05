@@ -14,7 +14,7 @@ func TestBuildKernel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	kern := BuildKernel(ctr, source, nil)
+	_, kern, _ := BuildKernel(ctr, source, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

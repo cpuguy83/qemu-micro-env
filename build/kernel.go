@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/moby/buildkit/client/llb"
+	"github.com/moby/buildkit/util/system"
 )
 
 type KernelVersion struct {
@@ -95,7 +96,83 @@ func GetKernelSource(version string) (File, error) {
 	return NewFile(llb.HTTP(url, llb.Filename("kernel.tar.gz")), "/kernel.tar.gz"), nil
 }
 
-func BuildKernel(container llb.State, source File, config *File) File {
+// BaseKernelOptions are used when building the kernel w/o a custom config.
+// We take the minimal `tinyconfig` and add these on top.
+var BaseKernelOptions = map[string]string{
+	"CONFIG_BINFMT_ELF":                   "y",
+	"CONFIG_BLOCK":                        "y",
+	"CONFIG_BLK_DEV":                      "y",
+	"CONFIG_BRIDGE":                       "y",
+	"CONFIG_BRIDGE_NETFILTER":             "y",
+	"CONFIG_BRIDGE_VLAN_FILTERING":        "y",
+	"CONFIG_CPUSETS":                      "y",
+	"CONFIG_CGROUPS":                      "y",
+	"CONFIG_CGROUP_BPF":                   "y",
+	"CONFIG_CGROUP_CPUACCT":               "y",
+	"CONFIG_CGROUP_DEVICE":                "y",
+	"CONFIG_CGROUP_FREEZER":               "y",
+	"CONFIG_CGROUP_PIDS":                  "y",
+	"CONFIG_CGROUP_SCHED":                 "y",
+	"CONFIG_INET_ESP":                     "m",
+	"CONFIG_IPC_NS":                       "y",
+	"CONFIG_IP_NF_FILTER":                 "y",
+	"CONFIG_IP_NF_NAT":                    "y",
+	"CONFIG_IP_NF_TARGET_MASQUERADE":      "y",
+	"CONFIG_IP_VALN":                      "m",
+	"CONFIG_IP_VS":                        "m",
+	"CONFIG_IP_VS_RR":                     "y",
+	"CONFIG_KEYS":                         "y",
+	"CONFIG_MACVLAN":                      "m",
+	"CONFIG_MEMCG":                        "y",
+	"CONFIG_MEMCG_SWAP":                   "y",
+	"CONFIG_MODULES":                      "y",
+	"CONFIG_NAMESPACES":                   "y",
+	"CONFIG_NET":                          "y",
+	"CONFIG_NETFILTER_XT_MATCH_ADDRTYPE":  "y",
+	"CONFIG_NETFILTER_XT_MATCH_CONNTRACK": "y",
+	"CONFIG_NETFILTER_XT_MATCH_IPVS":      "y",
+	"CONFIG_NETFILTER_XT_MARK":            "y",
+	"CONFIG_NETDEVICES":                   "y",
+	"CONFIG_NET_CORE":                     "y",
+	"CONFIG_NET_NS":                       "y",
+	"CONFIG_OVERLAY_FS":                   "m",
+	"CONFIG_PID_NS":                       "y",
+	"CONFIG_POSIX_MQUEUE":                 "y",
+	"CONFIG_TTY":                          "y",
+	"CONFIG_UTS_NS":                       "y",
+	"CONFIG_USER_NS":                      "y",
+	"CONFIG_VETH":                         "y",
+	"CONFIG_VXLAN":                        "m",
+	"CONFIG_XFRM":                         "y",
+	"CONFIG_9P_FS":                        "y",
+	"CONFIG_DEBUG_KERNEL":                 "y",
+	"CONFIG_DRM_VIRTIO_GPU":               "y",
+	"CONFIG_HYPERVISOR_GUEST":             "y",
+	"CONFIG_INET":                         "y",
+	"CONFIG_IP_PNP":                       "y",
+	"CONFIG_IP_PNP_DHCP":                  "y",
+	"CONFIG_KVM_GUEST":                    "y",
+	"CONFIG_NET_9P":                       "y",
+	"CONFIG_NET_9P_VIRTIO":                "y",
+	"CONFIG_NETWORK_FILESYSTEMS":          "y",
+	"CONFIG_PCI":                          "y",
+	"CONFIG_PCI_MSI":                      "y",
+	"CONFIG_PARAVIRT":                     "y",
+	"CONFIG_S390_GUEST":                   "y",
+	"CONFIG_SCSCI_LOWLEVEL":               "y",
+	"CONFIG_SCSCI_VIRTIO":                 "y",
+	"CONFIG_SERIAL_8250":                  "y",
+	"CONFIG_SERIAL_8250_CONSOLE":          "y",
+	"CONFIG_VIRTUALIZATION":               "y",
+	"CONFIG_VIRTIO":                       "y",
+	"CONFIG_VIRTIO_BLK":                   "y",
+	"CONFIG_VIRTIO_CONSOLE":               "y",
+	"CONFIG_VIRTIO_INPUT":                 "y",
+	"CONFIG_VIRTIO_MENU":                  "y",
+	"CONFIG_VIRTIO_NET":                   "y",
+}
+
+func BuildKernel(container llb.State, source File, config *File) (kernelCfg File, vmlinuz File, modules Directory) {
 	const version = `
 .PHONY: printversion
 printversion:
@@ -111,28 +188,38 @@ printversion:
 			llb.Shlex("tar -C /opt/src/kernel --strip-components=1 -xzf /opt/src/kernel.tar.gz"),
 		).
 		File(llb.Mkfile("/tmp/version.mk", 0644, []byte(version))).
-		Run(llb.Args([]string{"/bin/sh", "-c", "cat /tmp/version.mk >> /opt/src/kernel/Makefile"}))
+		Run(llb.Args([]string{"/bin/sh", "-c", "cat /tmp/version.mk >> /opt/src/kernel/Makefile"})).Root()
 
-	var opts []llb.RunOption
 	if config == nil {
-		ctr = ctr.Run(llb.Args([]string{"/bin/sh", "-c", "make defconfig"})).
-			Run(llb.Args([]string{"/bin/sh", "-c", "make kvm_guest.config"})).
-			Run(llb.Args([]string{"/bin/sh", "-c", "make olddefconfig"}))
+		s := &strings.Builder{}
+		for k, v := range BaseKernelOptions {
+			s.WriteString("echo " + k + "=" + v + " >> .config\n")
+		}
+		ctr = ctr.Run(llb.Args([]string{"/bin/sh", "-c", "make tinyconfig"})).
+			Run(llb.Args([]string{"/bin/sh", "-c", s.String()})).
+			Run(llb.Args([]string{"/bin/sh", "-c", "make olddefconfig"})).Root()
+
 	} else {
-		opts = append(opts, llb.AddMount("/opt/src/kernel/src/.config", config.State(), llb.Readonly, llb.SourcePath(config.Path())))
+		ctr = ctr.File(llb.Copy(config.State(), config.Path(), "/opt/src/kernel/src/.config"))
 	}
 
-	opts = append(opts, llb.Args([]string{
-		"/bin/sh", "-c",
-		`make -j$(nproc) && make install`,
-	}))
+	ctr = ctr.Run(
+		llb.AddMount("/root/.cache/ccache", llb.Scratch(), llb.AsPersistentCacheDir("kernel-ccache", llb.CacheMountShared)),
+		llb.AddEnv("CC", "ccache gcc"),
+		llb.AddEnv("PATH", system.DefaultPathEnvUnix),
+		llb.Args([]string{"/bin/sh", "-c", "make -j$(nproc) && make install"}),
+	).
+		Run(llb.Args([]string{"/bin/sh", "-c", "ln -s /boot/vmlinuz-$(make printversion) /boot/vmlinuz"})).Root()
 
-	opts = append(opts, llb.AddMount("/root/.cache/ccache", llb.Scratch(), llb.AsPersistentCacheDir("kernel-ccache", llb.CacheMountShared)))
-	opts = append(opts, llb.AddEnv("CC", "ccache gcc"))
-	ctr = ctr.Run(opts...).
-		Run(llb.Args([]string{"/bin/sh", "-c", "ln -s /boot/vmlinuz-$(make printversion) /boot/vmlinuz"}))
+	f := NewFile(ctr, "/boot/vmlinuz")
+	kernelCfg = NewFile(ctr, "/opt/src/kernel/.config")
 
-	return NewFile(ctr.Root(), "/boot/vmlinuz")
+	// Install the modules if they exist
+	mods := ctr.Run(llb.Args([]string{"/bin/sh", "-c", "make modules_install || mkdir /lib/modules"})).Root()
+
+	dir := NewDirectory(mods, "/lib/modules")
+
+	return kernelCfg, f, dir
 }
 
 func KernelBuildBase() llb.State {
@@ -142,7 +229,7 @@ func KernelBuildBase() llb.State {
 		Run(
 			llb.Args([]string{
 				"/bin/sh", "-c",
-				"apt-get update && apt-get install -y build-essential bc libncurses-dev bison flex libssl-dev libelf-dev ccache",
+				"apt-get update && apt-get install -y build-essential bc libncurses-dev bison flex libssl-dev libelf-dev ccache kmod rsync",
 			}),
 		).Root()
 }

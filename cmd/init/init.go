@@ -74,7 +74,7 @@ func main() {
 		}
 	}
 
-	os.Setenv("PATH", "/bin:/sbin:/usr/bin:/usr/sbin")
+	os.Setenv("PATH", "/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin")
 	os.Setenv("HOME", "/root")
 	pwd, err := os.Getwd()
 	if err != nil {
@@ -126,7 +126,6 @@ func main() {
 	}
 
 	cmd := exec.Command(exe, args...)
-	cmd.Env = append(cmd.Env, "PATH=/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin")
 	cmd.Stdout = os.Stdout
 	cmd.Stdin = os.Stdin
 
@@ -268,6 +267,10 @@ func ssh() {
 	cmd.Stderr = logrus.WithField("component", "sshd").Writer()
 
 	if err := cmd.Start(); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			entries, _ := os.ReadDir("/lib")
+			logrus.Warn(entries[0].Name())
+		}
 		panic(err)
 	}
 }

@@ -1,6 +1,7 @@
 package build
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -11,7 +12,7 @@ var MobyRef = "docker:23-dind"
 
 const getCmdPaths = `
 mkdir -p /tmp/output
-commands="docker dockerd containerd containerd-shim-runc-v2 runc"
+commands="docker dockerd docker-init docker-proxy containerd containerd-shim-runc-v2 runc"
 for i in ${commands}; do
 	cmd="$(command -v ${i})"
 	if [ $? -ne 0 ]; then
@@ -21,6 +22,42 @@ for i in ${commands}; do
 	mv "${cmd}" "/tmp/output/${i}"
 done
 `
+
+var MobyKernelMods = []string{
+	"br_netfilter",
+	"ip_conntrack",
+	"ip_tables",
+	"ipt_conntrack",
+	"ipt_MASQUERADE",
+	"ipt_REJECT",
+	"ipt_state",
+	"iptable_filter",
+	"iptable_nat",
+	"overlay",
+	"nf_conntrack",
+	"nf_conntrack_netlink",
+	"xt_addrtype",
+	"xt_u32",
+	"veth",
+}
+
+var DockerdInitScriptName = "/usr/local/bin/dockerd-init"
+
+func DockerdInitScript() File {
+	b := bytes.NewBuffer(nil)
+	b.WriteString("#!/bin/sh\n\n")
+
+	// Don't error out just because the module load fails
+	// Dockerd will either fallback or error out on its own
+	b.WriteString("modprobe -a " + strings.Join(MobyKernelMods, " ") + "\n\n")
+
+	b.WriteString("echo 1 > /proc/sys/net/ipv4/ip_forward\n")
+	b.WriteString("exec dockerd ${@}\n")
+
+	return NewFile(llb.Scratch().
+		File(llb.Mkdir("/usr/local/bin", 0755, llb.WithParents(true))).
+		File(llb.Mkfile(DockerdInitScriptName, 0777, b.Bytes())), DockerdInitScriptName)
+}
 
 func GetMoby(ref string) (llb.State, error) {
 	if ref == "" {

@@ -93,7 +93,7 @@ func AddVMFlags(set *flag.FlagSet, cfg *VMConfig) {
 	set.IntVar(&cfg.Uid, "uid", os.Getuid(), "uid to use for the VM")
 	set.IntVar(&cfg.Gid, "gid", os.Getgid(), "gid to use for the VM")
 	set.BoolVar(&cfg.RequireKVM, "require-kvm", false, "require KVM to be available (will fail if not available)")
-	set.StringVar(&cfg.InitCmd, "init-cmd", "/usr/local/bin/dockerd", "command to run in the VM (after pid 1)")
+	set.StringVar(&cfg.InitCmd, "init-cmd", "/usr/local/bin/dockerd-init", "command to run in the VM (after pid 1)")
 }
 
 var vmxRegexp = regexp.MustCompile(`flags.*:.*(vmx|svm)`)

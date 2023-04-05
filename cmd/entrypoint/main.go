@@ -129,7 +129,7 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 
 		"-kernel", "/boot/vmlinuz",
 		"-initrd", "/boot/initrd.img",
-		"-append", "console=hvc0 root=/dev/vda rw acpi=off reboot=t panic=-1 ip=dhcp " + quiet + "init=/sbin/custom-init - --cgroup-version " + strconv.Itoa(cfg.CgroupVersion) + debugArg + vsockArg + " " + cfg.InitCmd,
+		"-append", "console=hvc0 root=/dev/vda rw acpi=off reboot=t panic=-1 ip=dhcp " + quiet + "init=/sbin/init - --cgroup-version " + strconv.Itoa(cfg.CgroupVersion) + debugArg + vsockArg + " " + cfg.InitCmd,
 
 		// pass through the host's rng device to the guest
 		"-object", "rng-random,id=rng0,filename=/dev/urandom",
@@ -195,7 +195,7 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 		}
 	}
 
-	if !cfg.UseVsock {
+	if !cfg.UseVsock && !cfg.DebugConsole {
 		go func() {
 			if err := doSSH(ctx, "/tmp/sockets", sshPort, cfg.Uid, cfg.Gid); err != nil {
 				logrus.WithError(err).Error("ssh failed")

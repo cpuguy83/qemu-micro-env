@@ -14,7 +14,7 @@ import (
 const (
 	defaultQcowSize   = "10GB"
 	entrypointPath    = "/usr/local/bin/docker-entrypoint"
-	initPath          = "/sbin/custom-init"
+	initPath          = "/sbin/init"
 	hostKernelContext = "host-kernel"
 )
 
@@ -24,14 +24,23 @@ func mkImage(ctx context.Context, spec *build.DiskImageSpec) (llb.State, error) 
 		return llb.Scratch(), fmt.Errorf("error generating entrypoint module LLB: %w", err)
 	}
 
-	states := []llb.State{
-		build.QemuBase(),
-		entrypoint,
-		spec.Build().State(),
-		spec.Kernel.Kernel.State(),
-		spec.Kernel.Initrd.State(),
+	if build.UseMergeOp {
+		states := []llb.State{
+			build.QemuBase(),
+			entrypoint,
+			spec.Build().State(),
+			spec.Kernel.Kernel.State(),
+			spec.Kernel.Initrd.State(),
+		}
+		return llb.Merge(states), nil
 	}
-	return llb.Merge(states), nil
+
+	specFile := spec.Build()
+	return build.QemuBase().
+		File(llb.Copy(entrypoint, entrypointPath, entrypointPath)).
+		File(llb.Copy(specFile.State(), specFile.Path(), specFile.Path())).
+		File(llb.Copy(spec.Kernel.Kernel.State(), spec.Kernel.Kernel.Path(), spec.Kernel.Kernel.Path())).
+		File(llb.Copy(spec.Kernel.Initrd.State(), spec.Kernel.Initrd.Path(), spec.Kernel.Initrd.Path())), nil
 }
 
 func specFromFlags(ctx context.Context, cfg vmImageConfig) (*build.DiskImageSpec, error) {
@@ -42,7 +51,7 @@ func specFromFlags(ctx context.Context, cfg vmImageConfig) (*build.DiskImageSpec
 	if cfg.rootfs != "" {
 		spec.Rootfs = llb.Image(cfg.rootfs)
 	} else {
-		initMod, err := InitModule(WithOutputPath("/sbin/custom-init"))
+		initMod, err := InitModule()
 		if err != nil {
 			return nil, err
 		}
@@ -51,7 +60,15 @@ func specFromFlags(ctx context.Context, cfg vmImageConfig) (*build.DiskImageSpec
 		if err != nil {
 			return nil, err
 		}
-		spec.Rootfs = llb.Merge([]llb.State{build.JammyRootfs(), initMod, mobySt})
+		if build.UseMergeOp {
+			spec.Rootfs = llb.Merge([]llb.State{build.JammyRootfs(), initMod, mobySt, build.DockerdInitScript().State()})
+		} else {
+			script := build.DockerdInitScript()
+			spec.Rootfs = build.JammyRootfs().
+				File(llb.Copy(initMod, initPath, initPath)).
+				File(llb.Copy(mobySt, "/", "/")).
+				File(llb.Copy(build.DockerdInitScript().State(), script.Path(), script.Path()))
+		}
 	}
 
 	var err error
@@ -69,6 +86,7 @@ func specFromFlags(ctx context.Context, cfg vmImageConfig) (*build.DiskImageSpec
 }
 
 var defaultKernelSt = build.JammyRootfs().Run(
+	llb.AddEnv("DEBIAN_FRONTEND", "noninteractive"),
 	llb.Args([]string{
 		"/bin/sh", "-c", "apt-get update && apt-get install -y linux-image-kvm",
 	}),
@@ -79,6 +97,8 @@ func getKernel(cfg vmImageConfig) (build.Kernel, error) {
 
 	if cfg.kernel.isEmpty() {
 		k.Kernel = build.NewFile(defaultKernelSt, "/boot/vmlinuz")
+		k.Modules = build.NewDirectory(defaultKernelSt, "/lib/modules")
+		k.Config = build.NewFile(defaultKernelSt, "/boot/config-*")
 	} else {
 		switch cfg.kernel.scheme {
 		case "rootfs":
@@ -88,7 +108,7 @@ func getKernel(cfg vmImageConfig) (build.Kernel, error) {
 			if err != nil {
 				return k, fmt.Errorf("error getting kernel source: %w", err)
 			}
-			k.Kernel = build.BuildKernel(build.KernelBuildBase(), src, nil)
+			k.Config, k.Kernel, k.Modules = build.BuildKernel(build.KernelBuildBase(), src, nil)
 		case "docker-image":
 			k.Kernel = build.NewFile(llb.Image(cfg.kernel.ref), "/boot/vmlinuz")
 		default:
