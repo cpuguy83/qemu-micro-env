@@ -53,6 +53,7 @@ type VMConfig struct {
 	UseVsock      bool
 	Uid           int
 	Gid           int
+	InitCmd       string
 }
 
 func (c VMConfig) AsFlags() []string {
@@ -68,6 +69,7 @@ func (c VMConfig) AsFlags() []string {
 		"--uid=" + strconv.Itoa(c.Uid),
 		"--gid=" + strconv.Itoa(c.Gid),
 		"--require-kvm=" + strconv.FormatBool(c.RequireKVM),
+		"--init-cmd", c.InitCmd,
 	}
 	if len(c.PortForwards) > 0 {
 		flags = append(flags, "--vm-port-forward="+strings.Join(convertPortForwards(c.PortForwards), ","))
@@ -76,6 +78,9 @@ func (c VMConfig) AsFlags() []string {
 }
 
 func AddVMFlags(set *flag.FlagSet, cfg *VMConfig) {
+	if set.Lookup("cgroup-version") != nil {
+		return
+	}
 	set.IntVar(&cfg.CgroupVersion, "cgroup-version", 2, "cgroup version to use")
 	set.BoolVar(&cfg.NoKVM, "no-kvm", false, "disable KVM")
 	set.IntVar(&cfg.NumCPU, "num-cpus", 2, "number of CPUs to use")
@@ -88,6 +93,7 @@ func AddVMFlags(set *flag.FlagSet, cfg *VMConfig) {
 	set.IntVar(&cfg.Uid, "uid", os.Getuid(), "uid to use for the VM")
 	set.IntVar(&cfg.Gid, "gid", os.Getgid(), "gid to use for the VM")
 	set.BoolVar(&cfg.RequireKVM, "require-kvm", false, "require KVM to be available (will fail if not available)")
+	set.StringVar(&cfg.InitCmd, "init-cmd", "/usr/local/bin/dockerd-init", "command to run in the VM (after pid 1)")
 }
 
 var vmxRegexp = regexp.MustCompile(`flags.*:.*(vmx|svm)`)

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -32,7 +33,8 @@ func (f *logFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 
 func main() {
 	cgVerP := flag.Int("cgroup-version", 2, "cgroup version to use (1 or 2)")
-	debugConsole := flag.Bool("debug", false, "Get shell before init is run")
+	debugConsole := flag.Bool("debug-console", false, "Get shell before init is run")
+	debug := flag.Bool("debug", false, "Get shell before init is run")
 	authorizedKeysPipe := flag.String("authorized-keys-pipe", "/dev/virtio-ports/authorized_keys", "Pipe to read authorized keys from")
 	useVsock := flag.Bool("vsock", false, "Use vsock to proxy docker socket")
 
@@ -47,6 +49,10 @@ func main() {
 	logrus.SetFormatter(&logFormatter{&nested.Formatter{}})
 
 	flag.Parse()
+
+	if *debug {
+		logrus.SetLevel(logrus.DebugLevel)
+	}
 
 	switch flag.Arg(0) {
 	case "_check":
@@ -68,7 +74,7 @@ func main() {
 		}
 	}
 
-	os.Setenv("PATH", "/bin:/sbin:/usr/bin:/usr/sbin")
+	os.Setenv("PATH", "/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin")
 	os.Setenv("HOME", "/root")
 	pwd, err := os.Getwd()
 	if err != nil {
@@ -111,20 +117,22 @@ func main() {
 	default:
 		panic("invalid value for cgroup-version")
 	}
+	logrus.Info("mounted cgroups")
 
-	setupNetwork()
+	exe := flag.Arg(0)
+	var args []string
+	if len(flag.Args()) > 1 {
+		args = flag.Args()[1:]
+	}
 
-	logrus.Info(os.Environ())
-
-	cmd := exec.Command("/usr/bin/dockerd")
-	cmd.Env = append(cmd.Env, "PATH=/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin")
+	cmd := exec.Command(exe, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stdin = os.Stdin
 
 	l := logrus.New()
 	l.SetOutput(os.Stderr)
 	l.SetFormatter(&nested.Formatter{})
-	cmd.Stderr = l.WithField("component", "dockerd").Writer()
+	cmd.Stderr = l.WithField("component", "vm:"+filepath.Base(exe)).Writer()
 
 	go reap()
 	if !*useVsock {
@@ -135,6 +143,8 @@ func main() {
 	}
 
 	fmt.Fprintln(os.Stderr, "Welcome to the vm!")
+
+	logrus.Debug("starting command")
 
 	if err := cmd.Run(); err != nil {
 		panic(err)
@@ -246,6 +256,7 @@ func reap() {
 }
 
 func ssh() {
+	logrus.Debug("starting ssh")
 	cmd := exec.Command("/usr/sbin/sshd", "-D")
 	cmd.Stdout = os.Stdout
 
@@ -256,6 +267,10 @@ func ssh() {
 	cmd.Stderr = logrus.WithField("component", "sshd").Writer()
 
 	if err := cmd.Start(); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			entries, _ := os.ReadDir("/lib")
+			logrus.Warn(entries[0].Name())
+		}
 		panic(err)
 	}
 }

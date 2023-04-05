@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	nested "github.com/antonfisher/nested-logrus-formatter"
-	"github.com/cpuguy83/qemu-micro-env/cmd/entrypoint/vmconfig"
+	"github.com/cpuguy83/qemu-micro-env/build/vmconfig"
 	"github.com/sirupsen/logrus"
 )
 
@@ -37,8 +37,13 @@ func doExec(ctx context.Context, args []string) error {
 
 	flags := flag.CommandLine
 	vmconfig.AddVMFlags(flags, &cfg)
+	debug := flag.Bool("debug", false, "enable debug logging")
 
 	flags.Parse(args)
+
+	if *debug {
+		logrus.SetLevel(logrus.DebugLevel)
+	}
 
 	logrus.Debugf("%+v", cfg)
 	logrus.Debug(args)
@@ -91,12 +96,18 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 
 	var debugArg string
 	if cfg.DebugConsole {
-		debugArg = " --debug"
+		debugArg = " --debug-console "
 	}
 
 	var vsockArg string
 	if cfg.UseVsock {
-		vsockArg = " --vsock"
+		vsockArg = " --vsock "
+	}
+
+	quiet := " quiet "
+	if logrus.GetLevel() >= logrus.DebugLevel {
+		quiet = ""
+		debugArg += " --debug "
 	}
 
 	args := []string{
@@ -118,7 +129,7 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 
 		"-kernel", "/boot/vmlinuz",
 		"-initrd", "/boot/initrd.img",
-		"-append", "console=hvc0 root=/dev/vda rw acpi=off reboot=t panic=-1 ip=dhcp quiet init=/sbin/custom-init - --cgroup-version " + strconv.Itoa(cfg.CgroupVersion) + debugArg + vsockArg,
+		"-append", "console=hvc0 root=/dev/vda rw acpi=off reboot=t panic=-1 ip=dhcp " + quiet + "init=/sbin/init - --cgroup-version " + strconv.Itoa(cfg.CgroupVersion) + debugArg + vsockArg + " " + cfg.InitCmd,
 
 		// pass through the host's rng device to the guest
 		"-object", "rng-random,id=rng0,filename=/dev/urandom",
@@ -184,7 +195,7 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 		}
 	}
 
-	if !cfg.UseVsock {
+	if !cfg.UseVsock && !cfg.DebugConsole {
 		go func() {
 			if err := doSSH(ctx, "/tmp/sockets", sshPort, cfg.Uid, cfg.Gid); err != nil {
 				logrus.WithError(err).Error("ssh failed")

@@ -3,37 +3,43 @@ package build
 import (
 	"context"
 	"testing"
+
+	bkclient "github.com/moby/buildkit/client"
 )
 
 func TestBuildKernel(t *testing.T) {
-	ctr := client.Container().From("ubuntu:jammy").WithExec([]string{
-		"/bin/sh", "-c",
-		`apt-get update && apt-get install -y \
-			build-essential \
-			libelf-dev \
-			libncurses-dev \
-			libssl-dev \
-			libelf-dev \
-			bc \
-			flex \
-			bison
-		`,
-	})
-	source, err := GetKernelSource(client, "6.2.2")
+	ctr := KernelBuildBase()
+	source, err := GetKernelSource("6.2.2")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	kern := BuildKernel(ctr, source, nil)
+	_, kern, _ := BuildKernel(ctr, source, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	sz, err := kern.Size(context.Background())
+	ch := make(chan *bkclient.SolveStatus)
+	done := make(chan struct{})
+	go func() {
+		for s := range ch {
+			for _, v := range s.Logs {
+				t.Log("\n" + string(v.Data))
+			}
+		}
+		close(done)
+	}()
+
+	ctx := context.Background()
+
+	def, err := kern.State().Marshal(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sz == 0 {
-		t.Fatal("kernel size is zero")
+
+	_, err = client.Solve(ctx, def, bkclient.SolveOpt{}, ch)
+	if err != nil {
+		t.Fatal(err)
 	}
+	<-done
 }

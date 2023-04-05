@@ -1,50 +1,55 @@
 package build
 
 import (
+	"fmt"
 	gofs "io/fs"
 
-	"dagger.io/dagger"
+	"github.com/moby/buildkit/client/llb"
 )
 
 // RewriteFn is a function that can be used to rewrite the path of a file or directory
 // It is used by GoFSToDagger to allow callers to pass in a function that can rewrite the path.
 type RewriteFn func(string) string
 
-// GoFSToDagger converts a gofs.FS to a dagger.Directory.
-// This does require reading the contents of all files into memory and the data is converted to a string.
-func GoFSToDagger(fs gofs.FS, dir *dagger.Directory, rewrite RewriteFn) (*dagger.Directory, error) {
-	err := gofs.WalkDir(fs, ".", func(path string, d gofs.DirEntry, err error) error {
+// GoFSToDagger converts a gofs.FS to llb state.
+func GoFSToLLB(fs gofs.FS, rewrite RewriteFn) (llb.State, error) {
+	st := llb.Scratch()
+	err := gofs.WalkDir(fs, ".", func(path string, entry gofs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		rewritten := rewrite(path)
-		if rewritten == "" {
-			return nil
+		rewritten := path
+		if rewrite != nil {
+			rewritten = rewrite(path)
+			if rewritten == "" {
+				return nil
+			}
 		}
 
 		if path == "." {
 			return nil
 		}
 
-		fi, err := d.Info()
+		fi, err := entry.Info()
 		if err != nil {
 			return err
 		}
 
-		perm := fi.Mode().Perm()
-		if d.IsDir() {
-			dir = dir.WithNewDirectory(rewritten, dagger.DirectoryWithNewDirectoryOpts{Permissions: int(perm)})
+		if entry.IsDir() {
+			st = st.File(llb.Mkdir(rewritten, fi.Mode(), llb.WithParents(true)))
 			return nil
 		}
 
-		b, err := gofs.ReadFile(fs, path)
+		dt, err := gofs.ReadFile(fs, path)
 		if err != nil {
 			return err
 		}
-
-		dir = dir.WithNewFile(rewritten, string(b), dagger.DirectoryWithNewFileOpts{Permissions: int(perm)})
+		st = st.File(llb.Mkfile(rewritten, fi.Mode(), dt))
 		return nil
 	})
-	return dir, err
+	if err != nil {
+		return llb.Scratch(), fmt.Errorf("error walking embedded source dir: %w", err)
+	}
+	return st, nil
 }
