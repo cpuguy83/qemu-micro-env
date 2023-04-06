@@ -12,9 +12,10 @@ import (
 	"github.com/cpuguy83/qemu-micro-env/build"
 	"github.com/cpuguy83/qemu-micro-env/build/vmconfig"
 	bkclient "github.com/moby/buildkit/client"
-	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/exporter/containerimage/exptypes"
+	gateway "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/identity"
+	"github.com/moby/buildkit/solver/pb"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 )
@@ -33,14 +34,16 @@ func buildFlags(set *flag.FlagSet, cfg *config) {
 }
 
 func checkMergeOp(ctx context.Context, client *bkclient.Client) {
-	def, err := llb.Merge([]llb.State{llb.Scratch().File(llb.Mkdir("/a", 0700)), llb.Scratch().File(llb.Mkdir("/b", 0700))}).Marshal(ctx)
+	_, err := client.Build(ctx, bkclient.SolveOpt{}, "", func(ctx context.Context, client gateway.Client) (*gateway.Result, error) {
+		capset := client.BuildOpts().Caps
+		err := capset.Supports(pb.CapMergeOp)
+		if !build.UseMergeOp {
+			logrus.WithError(err).Info("Disabling MergeOp support due to error")
+		}
+		return &gateway.Result{}, nil
+	}, nil)
 	if err != nil {
-		panic(err)
-	}
-	if _, err := client.Solve(ctx, def, bkclient.SolveOpt{
-		Exports: mobyExports,
-	}, nil); err != nil {
-		logrus.WithError(err).Info("Disabling MergeOp support due to error")
+		logrus.WithError(err).Warn("Error checking for MergeOp support, disabling")
 		build.UseMergeOp = false
 	}
 }
