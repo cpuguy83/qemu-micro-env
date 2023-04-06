@@ -29,6 +29,7 @@ func buildFlags(set *flag.FlagSet, cfg *config) {
 	set.StringVar(&cfg.ImageConfig.rootfs, "rootfs", "", "Image to get a rootfs from. If empty will use the default rootfs.")
 	set.Var(&cfg.ImageConfig.kernel, "kernel", "kernel spec")
 	set.Var(&cfg.ImageConfig.initrd, "initrd", "initrd spec")
+	set.Var(&cfg.ImageConfig.modules, "modules", "kernel modules spec")
 }
 
 func checkMergeOp(ctx context.Context, client *bkclient.Client) {
