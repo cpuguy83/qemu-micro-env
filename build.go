@@ -37,11 +37,12 @@ func mkImage(ctx context.Context, spec *build.DiskImageSpec) (llb.State, error) 
 	}
 
 	specFile := spec.Build()
-	return build.QemuBase().
-		File(llb.Copy(entrypoint, entrypointPath, entrypointPath)).
-		File(llb.Copy(specFile.State(), specFile.Path(), specFile.Path())).
-		File(llb.Copy(spec.Kernel.Kernel.State(), spec.Kernel.Kernel.Path(), spec.Kernel.Kernel.Path())).
-		File(llb.Copy(spec.Kernel.Initrd.State(), spec.Kernel.Initrd.Path(), spec.Kernel.Initrd.Path())), nil
+	st := build.QemuBase().File(llb.Copy(entrypoint, entrypointPath, entrypointPath))
+	st = specFile.CopyTo(st)
+	st = spec.Kernel.Kernel.CopyTo(st)
+	st = spec.Kernel.Initrd.CopyTo(st)
+
+	return st, nil
 }
 
 func specFromFlags(ctx context.Context, cfg vmImageConfig) (*build.DiskImageSpec, error) {
