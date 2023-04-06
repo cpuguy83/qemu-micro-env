@@ -50,10 +50,13 @@ type VMConfig struct {
 	CgroupVersion int
 	Memory        string
 	DebugConsole  bool
-	UseVsock      bool
 	Uid           int
 	Gid           int
 	InitCmd       string
+
+	// The code around this was remove so it really doesn't do anything right now.
+	// Keeping for now as fully removing means trashing code that may still be useful.
+	UseVsock bool
 }
 
 func (c VMConfig) AsFlags() []string {
@@ -65,7 +68,6 @@ func (c VMConfig) AsFlags() []string {
 		"--cpu-arch=" + ArchStringToQemu(c.CPUArch),
 		"--no-micro=" + strconv.FormatBool(c.NoMicro),
 		"--debug-console=" + strconv.FormatBool(c.DebugConsole),
-		"--vsock=" + strconv.FormatBool(c.UseVsock),
 		"--uid=" + strconv.Itoa(c.Uid),
 		"--gid=" + strconv.Itoa(c.Gid),
 		"--require-kvm=" + strconv.FormatBool(c.RequireKVM),
@@ -89,7 +91,6 @@ func AddVMFlags(set *flag.FlagSet, cfg *VMConfig) {
 	set.BoolVar(&cfg.NoMicro, "no-micro", false, "disable microVMs - useful for allowing the VM to have access to PCI devices")
 	set.Var(&cfg.PortForwards, "vm-port-forward", "port forwards to set up from the VM")
 	set.BoolVar(&cfg.DebugConsole, "debug-console", false, "enable debug console")
-	set.BoolVar(&cfg.UseVsock, "vsock", false, "use vsock for communication")
 	set.IntVar(&cfg.Uid, "uid", os.Getuid(), "uid to use for the VM")
 	set.IntVar(&cfg.Gid, "gid", os.Getgid(), "gid to use for the VM")
 	set.BoolVar(&cfg.RequireKVM, "require-kvm", false, "require KVM to be available (will fail if not available)")

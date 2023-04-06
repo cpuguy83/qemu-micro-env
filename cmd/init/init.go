@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -16,7 +15,6 @@ import (
 	"time"
 
 	nested "github.com/antonfisher/nested-logrus-formatter"
-	"github.com/cpuguy83/go-vsock"
 	"github.com/creack/pty"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
@@ -36,7 +34,6 @@ func main() {
 	debugConsole := flag.Bool("debug-console", false, "Get shell before init is run")
 	debug := flag.Bool("debug", false, "Get shell before init is run")
 	authorizedKeysPipe := flag.String("authorized-keys-pipe", "/dev/virtio-ports/authorized_keys", "Pipe to read authorized keys from")
-	useVsock := flag.Bool("vsock", false, "Use vsock to proxy docker socket")
 
 	// remove "-" from begining of args passed by the kernel
 	if len(os.Args) > 1 {
@@ -83,10 +80,6 @@ func main() {
 	os.Setenv("PWD", pwd)
 
 	logrus.Info("init: " + strings.Join(os.Args, " "))
-
-	if *useVsock {
-		go listenVsock()
-	}
 
 	if *debugConsole {
 		cmd := exec.Command("/bin/bash")
@@ -135,11 +128,9 @@ func main() {
 	cmd.Stderr = l.WithField("component", "vm:"+filepath.Base(exe)).Writer()
 
 	go reap()
-	if !*useVsock {
-		ssh()
-		if err := setupSSHKeys(*authorizedKeysPipe); err != nil {
-			panic(err)
-		}
+	ssh()
+	if err := setupSSHKeys(*authorizedKeysPipe); err != nil {
+		panic(err)
 	}
 
 	fmt.Fprintln(os.Stderr, "Welcome to the vm!")
@@ -267,10 +258,6 @@ func ssh() {
 	cmd.Stderr = logrus.WithField("component", "sshd").Writer()
 
 	if err := cmd.Start(); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			entries, _ := os.ReadDir("/lib")
-			logrus.Warn(entries[0].Name())
-		}
 		panic(err)
 	}
 }
@@ -308,33 +295,4 @@ func setupSSHKeys(pipe string) error {
 	}
 	logrus.Info("wrote authorized_keys")
 	return nil
-}
-
-func listenVsock() {
-	l, err := vsock.ListenVsock(unix.VMADDR_CID_ANY, 2375)
-	if err != nil {
-		panic(err)
-	}
-	defer l.Close()
-
-	for {
-		conn, err := l.Accept()
-		if err != nil {
-			panic(err)
-		}
-
-		dc, err := net.Dial("unix", "/run/docker.sock")
-		if err != nil {
-			logrus.WithError(err).Error("error dialing docker socket")
-			conn.Close()
-			return
-		}
-		go func() {
-			defer conn.Close()
-			defer dc.Close()
-
-			go io.Copy(dc, conn)
-			io.Copy(conn, dc)
-		}()
-	}
 }
