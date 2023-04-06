@@ -24,6 +24,7 @@ type config struct {
 	ImageConfig vmImageConfig
 	ImageRef    string
 	Prune       bool
+	CacheSpec   string
 }
 
 type logFormatter struct {

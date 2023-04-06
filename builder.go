@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"os"
 	"strings"
 
 	nested "github.com/antonfisher/nested-logrus-formatter"
@@ -31,6 +32,7 @@ func buildFlags(set *flag.FlagSet, cfg *config) {
 	set.Var(&cfg.ImageConfig.kernel, "kernel", "kernel spec (docker-image://<image> (assumes /boot/vmlinuz), local://<path to vmlinuz>, <path to vmlinuz> (same as local://), version://<version> (compile from source))")
 	set.Var(&cfg.ImageConfig.initrd, "initrd", "initrd spec (docker-image://<image> (assumes /boot/initrd.img), local://<path to initrd.img>, <path to initrd.img> (same as local://))")
 	set.Var(&cfg.ImageConfig.modules, "modules", "kernel modules spec (docker-image://<image> (assumes /lib/modules), local://<path to modules dir>, <path to modules dir> (same as local://))")
+	set.StringVar(&cfg.CacheSpec, "remote-cache", os.Getenv("BUILDKIT_REMOTE_CACHE"), "Buildkit remote cache spec, default comes from the BUILDKIT_REMOTE_CACHE environment variable")
 }
 
 func checkMergeOp(ctx context.Context, client *bkclient.Client) {
@@ -82,10 +84,41 @@ func doBuilder(ctx context.Context, cfg config, tr transport.Doer) (string, erro
 	ch := make(chan *bkclient.SolveStatus)
 	eg.Go(func() error {
 		var err error
+		var cacheOpts []bkclient.CacheOptionsEntry
+		if cfg.CacheSpec != "" {
+			attrs := make(map[string]string)
+			var typ string
+			var skip bool
+			for _, kv := range strings.Split(cfg.CacheSpec, ",") {
+				k, v, ok := strings.Cut(kv, "=")
+				if !ok {
+					skip = true
+					logrus.WithField("attr", kv).Error("Invalid cache spec attribute, skipping cache configuration")
+					break
+				}
+				if k == "type" {
+					typ = v
+					continue
+				}
+				attrs[k] = v
+			}
+			if !skip && typ == "" {
+				skip = true
+				logrus.Warn("Cache spec is missing type parameter, skipping")
+			}
+			if !skip {
+				cacheOpts = append(cacheOpts, bkclient.CacheOptionsEntry{
+					Type:  typ,
+					Attrs: attrs,
+				})
+			}
+		}
 		res, err = client.Solve(ctx, def, bkclient.SolveOpt{
-			Exports:   mobyExports,
-			Ref:       ref,
-			LocalDirs: getLocalContexts(cfg),
+			Exports:      mobyExports,
+			Ref:          ref,
+			CacheExports: cacheOpts,
+			CacheImports: cacheOpts,
+			LocalDirs:    getLocalContexts(cfg),
 		}, ch)
 		if err != nil {
 			return fmt.Errorf("error solving: %w", err)
