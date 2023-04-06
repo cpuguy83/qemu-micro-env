@@ -81,7 +81,7 @@ func doBuilder(ctx context.Context, cfg config, tr transport.Doer) (string, erro
 		res, err = client.Solve(ctx, def, bkclient.SolveOpt{
 			Exports:   mobyExports,
 			Ref:       ref,
-			LocalDirs: map[string]string{hostKernelContext: "/"},
+			LocalDirs: getLocalContexts(cfg),
 		}, ch)
 		if err != nil {
 			return fmt.Errorf("error solving: %w", err)

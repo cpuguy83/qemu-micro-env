@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	_ "embed"
 
@@ -101,8 +102,6 @@ func getKernel(cfg vmImageConfig) (build.Kernel, error) {
 		k.Config = build.NewFile(defaultKernelSt, "/boot/config-*")
 	} else {
 		switch cfg.kernel.scheme {
-		case "rootfs":
-			k.Kernel = build.NewFile(llb.Local(hostKernelContext, llb.IncludePatterns([]string{cfg.kernel.ref}), llb.FollowPaths([]string{cfg.kernel.ref})), cfg.kernel.ref)
 		case "version":
 			src, err := build.GetKernelSource(cfg.kernel.ref)
 			if err != nil {
@@ -111,6 +110,9 @@ func getKernel(cfg vmImageConfig) (build.Kernel, error) {
 			k.Config, k.Kernel, k.Modules = build.BuildKernel(build.KernelBuildBase(), src, nil)
 		case "docker-image":
 			k.Kernel = build.NewFile(llb.Image(cfg.kernel.ref), "/boot/vmlinuz")
+		case "local":
+			st := llb.Local(kernelImageContext, llb.FollowPaths([]string{filepath.Base(cfg.kernel.ref)}), llb.IncludePatterns([]string{filepath.Base(cfg.kernel.ref)}))
+			k.Kernel = build.NewFile(st, filepath.Base(cfg.kernel.ref)).WithTarget("/boot/vmlinuz")
 		default:
 			return k, fmt.Errorf("unsupported scheme for kernel: %s", cfg.kernel.scheme)
 		}
@@ -120,12 +122,27 @@ func getKernel(cfg vmImageConfig) (build.Kernel, error) {
 		k.Initrd = build.NewFile(defaultKernelSt, "/boot/initrd.img")
 	} else {
 		switch cfg.initrd.scheme {
-		case "rootfs":
-			k.Kernel = build.NewFile(llb.Local(hostKernelContext, llb.IncludePatterns([]string{cfg.initrd.ref}), llb.FollowPaths([]string{cfg.initrd.ref})), cfg.initrd.ref)
 		case "docker-image":
-			k.Kernel = build.NewFile(llb.Image(cfg.kernel.ref), "/boot/initrd.img")
+			k.Kernel = build.NewFile(llb.Image(cfg.initrd.ref), "/boot/initrd.img")
+		case "local":
+			st := llb.Local(initrdImageContext, llb.FollowPaths([]string{filepath.Base(cfg.initrd.ref)}), llb.IncludePatterns([]string{filepath.Base(cfg.initrd.ref)}))
+			k.Initrd = build.NewFile(st, filepath.Base(cfg.initrd.ref)).WithTarget("/boot/initrd.img")
 		default:
-			return k, fmt.Errorf("unsupported scheme for kernel: %s", cfg.kernel.scheme)
+			return k, fmt.Errorf("unsupported scheme for kernel: %s", cfg.initrd.scheme)
+		}
+	}
+
+	if cfg.modules.isEmpty() {
+
+	} else {
+		switch cfg.modules.scheme {
+		case "docker-image":
+			k.Modules = build.NewDirectory(llb.Image(cfg.modules.ref), "/lib/modules")
+		case "local":
+			st := llb.Local(modulesContext, llb.FollowPaths([]string{filepath.Base(cfg.modules.ref)}), llb.IncludePatterns([]string{filepath.Base(cfg.modules.ref)}))
+			k.Modules = build.NewDirectory(st, filepath.Base(cfg.modules.ref)).WithTarget("/lib/modules")
+		default:
+			return k, fmt.Errorf("unsupported scheme for kernel: %s", cfg.modules.scheme)
 		}
 	}
 

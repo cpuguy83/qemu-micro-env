@@ -2,53 +2,81 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
-
-	"github.com/cpuguy83/qemu-micro-env/build"
 )
 
-type kernelSpecFlag struct {
+const (
+	kernelImageContext = "kernel-image"
+	initrdImageContext = "initrd-image"
+	modulesContext     = "kernel-modules"
+)
+
+type specFlag struct {
 	scheme string
 	ref    string
 }
 
 type vmImageConfig struct {
-	kernel kernelSpecFlag
-	initrd kernelSpecFlag
-	rootfs string
-	size   string
+	kernel  specFlag
+	initrd  specFlag
+	modules specFlag
+	rootfs  string
+	size    string
 }
 
-func (f *kernelSpecFlag) Set(s string) error {
+func (f *specFlag) Set(s string) error {
 	if s == "" {
 		return nil
 	}
 	scheme, ref, ok := strings.Cut(s, "://")
 	if !ok {
-		return fmt.Errorf("invalid format, must be <scheme>://<ref>: %s", s)
-	}
-	switch scheme {
-	case "rootfs", "file", "docker-image", "qcow", "":
-	case "source":
-		_, _, ok := strings.Cut("://", ref)
+		if _, err := os.Stat(s); err == nil {
+			scheme = "local"
+			ref = s
+			ok = true
+		}
 		if !ok {
-			if _, err := build.ParseKernelVersion(ref); err != nil {
-				return err
-			}
+			return fmt.Errorf("invalid format, must be <scheme>://<ref>: %s", s)
 		}
 	}
+
 	f.scheme = scheme
 	f.ref = ref
 	return nil
 }
 
-func (f *kernelSpecFlag) isEmpty() bool {
+func (f *specFlag) isEmpty() bool {
 	return f.scheme == "" && f.ref == ""
 }
 
-func (f *kernelSpecFlag) String() string {
+func (f *specFlag) String() string {
 	if f.scheme == "" && f.ref == "" {
 		return ""
 	}
 	return f.scheme + "://" + f.ref
+}
+
+func getLocalContexts(cfg config) map[string]string {
+	var contexts map[string]string
+	get := func() map[string]string {
+		if contexts != nil {
+			return contexts
+		}
+		contexts = make(map[string]string)
+		return contexts
+	}
+
+	if cfg.ImageConfig.initrd.scheme == "local" {
+		get()[initrdImageContext] = filepath.Dir(cfg.ImageConfig.initrd.ref)
+	}
+	if cfg.ImageConfig.kernel.scheme == "local" {
+		get()[kernelImageContext] = filepath.Dir(cfg.ImageConfig.kernel.ref)
+	}
+	if cfg.ImageConfig.modules.scheme == "local" {
+		get()[modulesContext] = filepath.Dir(cfg.ImageConfig.modules.ref)
+	}
+
+	return contexts
 }
