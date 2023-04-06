@@ -9,20 +9,36 @@ import (
 var UseMergeOp = true
 
 type File struct {
-	st llb.State
-	p  string
+	st     llb.State
+	p      string
+	target string
 }
 
 func (f File) Path() string {
 	return f.p
 }
 
+func (f File) Target() string {
+	if f.target == "" {
+		return f.p
+	}
+	return f.target
+}
+
 func (f File) State() llb.State {
-	return llb.Scratch().File(llb.Copy(f.st, f.p, f.p, createParentsCopyOption{}, copyFollowSymlink{}, copyWithGlob{f.p}))
+	return f.CopyTo(llb.Scratch())
+}
+
+func (f File) CopyTo(st llb.State) llb.State {
+	return st.File(llb.Copy(f.st, f.Path(), f.Target(), createParentsCopyOption{}, copyFollowSymlink{}, copyWithGlob{f.p}))
 }
 
 func (f File) IsEmpty() bool {
 	return f.p == ""
+}
+
+func (f File) WithTarget(target string) File {
+	return File{st: f.st, p: f.p, target: target}
 }
 
 func NewFile(st llb.State, p string) File {
@@ -30,8 +46,9 @@ func NewFile(st llb.State, p string) File {
 }
 
 type Directory struct {
-	st llb.State
-	p  string
+	st     llb.State
+	p      string
+	target string
 }
 
 func NewDirectory(st llb.State, p string) Directory {
@@ -43,11 +60,26 @@ func (d Directory) Path() string {
 }
 
 func (d Directory) State() llb.State {
-	return llb.Scratch().File(llb.Copy(d.st, d.p, d.p, createParentsCopyOption{}, copyDirContentsOnly{}, copyFollowSymlink{}))
+	return d.CopyTo(llb.Scratch())
+}
+
+func (d Directory) CopyTo(st llb.State) llb.State {
+	return st.File(llb.Copy(d.st, d.Path(), d.Target(), createParentsCopyOption{}, copyDirContentsOnly{}, copyFollowSymlink{}))
 }
 
 func (d Directory) IsEmpty() bool {
 	return d.p == ""
+}
+
+func (d Directory) WithTarget(target string) Directory {
+	return Directory{st: d.st, p: d.p, target: target}
+}
+
+func (d Directory) Target() string {
+	if d.target == "" {
+		return d.p
+	}
+	return d.target
 }
 
 type Kernel struct {
@@ -64,20 +96,11 @@ type DiskImageSpec struct {
 }
 
 func (s *DiskImageSpec) Build() File {
-	st := s.Rootfs.File(llb.Copy(s.Kernel.Kernel.State(), s.Kernel.Kernel.Path(), "/boot/vmlinuz", createParentsCopyOption{}))
-
-	if !s.Kernel.Initrd.IsEmpty() {
-		st = st.File(llb.Copy(s.Kernel.Initrd.State(), s.Kernel.Initrd.Path(), "/boot/initrd.img", createParentsCopyOption{}))
-	}
-
+	st := s.Rootfs
+	// TODO: It'd be great to not have to bake this into the qcow image because this adds a lot of overhead anytime the modules change.
 	if !s.Kernel.Modules.IsEmpty() {
-		st = st.File(llb.Copy(s.Kernel.Modules.State(), s.Kernel.Modules.Path(), "/lib/modules", createParentsCopyOption{}, copyDirContentsOnly{}, copyFollowSymlink{}))
+		st = s.Kernel.Modules.CopyTo(st)
 	}
-
-	if !s.Kernel.Config.IsEmpty() {
-		st = st.File(llb.Copy(s.Kernel.Config.State(), s.Kernel.Config.Path(), "/boot/config", createParentsCopyOption{}))
-	}
-
 	return QcowFrom(st, s.Size)
 }
 
