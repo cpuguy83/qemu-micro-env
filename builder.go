@@ -28,9 +28,9 @@ func buildFlags(set *flag.FlagSet, cfg *config) {
 	vmconfig.AddVMFlags(set, &cfg.VM)
 	set.StringVar(&cfg.ImageConfig.size, "qcow-size", defaultQcowSize, "Size for the created qcow image")
 	set.StringVar(&cfg.ImageConfig.rootfs, "rootfs", "", "Image to get a rootfs from. If empty will use the default rootfs.")
-	set.Var(&cfg.ImageConfig.kernel, "kernel", "kernel spec")
-	set.Var(&cfg.ImageConfig.initrd, "initrd", "initrd spec")
-	set.Var(&cfg.ImageConfig.modules, "modules", "kernel modules spec")
+	set.Var(&cfg.ImageConfig.kernel, "kernel", "kernel spec (docker-image://<image> (assumes /boot/vmlinuz), local://<path to vmlinuz>, <path to vmlinuz> (same as local://), version://<version> (compile from source))")
+	set.Var(&cfg.ImageConfig.initrd, "initrd", "initrd spec (docker-image://<image> (assumes /boot/initrd.img), local://<path to initrd.img>, <path to initrd.img> (same as local://))")
+	set.Var(&cfg.ImageConfig.modules, "modules", "kernel modules spec (docker-image://<image> (assumes /lib/modules), local://<path to modules dir>, <path to modules dir> (same as local://))")
 }
 
 func checkMergeOp(ctx context.Context, client *bkclient.Client) {
