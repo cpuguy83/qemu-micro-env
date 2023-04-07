@@ -11,7 +11,6 @@ import (
 	"github.com/cpuguy83/go-docker/buildkitopt"
 	"github.com/cpuguy83/go-docker/transport"
 	"github.com/cpuguy83/qemu-micro-env/build"
-	"github.com/cpuguy83/qemu-micro-env/build/vmconfig"
 	bkclient "github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/exporter/containerimage/exptypes"
 	gateway "github.com/moby/buildkit/frontend/gateway/client"
@@ -26,7 +25,6 @@ var mobyExports = []bkclient.ExportEntry{
 }
 
 func buildFlags(set *flag.FlagSet, cfg *config) {
-	vmconfig.AddVMFlags(set, &cfg.VM)
 	set.StringVar(&cfg.ImageConfig.size, "qcow-size", defaultQcowSize, "Size for the created qcow image")
 	set.StringVar(&cfg.ImageConfig.rootfs, "rootfs", "", "Image to get a rootfs from. If empty will use the default rootfs.")
 	set.Var(&cfg.ImageConfig.kernel, "kernel", "kernel spec (docker-image://<image> (assumes /boot/vmlinuz), local://<path to vmlinuz>, <path to vmlinuz> (same as local://), version://<version> (compile from source))")
