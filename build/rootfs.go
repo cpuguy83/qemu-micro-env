@@ -10,7 +10,7 @@ func JammyRootfs() llb.State {
 	return llb.Image(JammyRef).
 		Run(llb.Args([]string{
 			"/bin/sh", "-c",
-			"apt-get update && apt-get install -y iptables ssh kmod systemd",
+			"apt-get update && apt-get install -y iptables ssh kmod",
 		}),
 			llb.AddEnv("DEBIAN_FRONTEND", "noninteractive"),
 		).
