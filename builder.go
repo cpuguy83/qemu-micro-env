@@ -33,6 +33,8 @@ func buildFlags(set *flag.FlagSet, cfg *config) {
 	set.Var(&cfg.ImageConfig.initrd, "initrd", "initrd spec (docker-image://<image> (assumes /boot/initrd.img), local://<path to initrd.img>, <path to initrd.img> (same as local://))")
 	set.Var(&cfg.ImageConfig.modules, "modules", "kernel modules spec (docker-image://<image> (assumes /lib/modules), local://<path to modules dir>, <path to modules dir> (same as local://))")
 	set.StringVar(&cfg.CacheSpec, "remote-cache", os.Getenv("BUILDKIT_REMOTE_CACHE"), "Buildkit remote cache spec, default comes from the BUILDKIT_REMOTE_CACHE environment variable")
+	set.StringVar(&cfg.Tag, "t", "", "Tag the produced image")
+	set.BoolVar(&cfg.Push, "push", false, "Push the produced image")
 }
 
 func checkMergeOp(ctx context.Context, client *bkclient.Client) {
@@ -113,8 +115,19 @@ func doBuilder(ctx context.Context, cfg config, tr transport.Doer) (string, erro
 				})
 			}
 		}
+
+		exports := mobyExports
+		if cfg.Tag != "" {
+			if exports[0].Attrs == nil {
+				exports[0].Attrs = make(map[string]string, 1)
+			}
+			exports[0].Attrs["name"] = cfg.Tag
+			if cfg.Push {
+				exports[0].Attrs["push"] = "true"
+			}
+		}
 		res, err = client.Solve(ctx, def, bkclient.SolveOpt{
-			Exports:      mobyExports,
+			Exports:      exports,
 			Ref:          ref,
 			CacheExports: cacheOpts,
 			CacheImports: cacheOpts,

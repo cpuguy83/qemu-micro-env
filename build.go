@@ -134,7 +134,7 @@ func getKernel(cfg vmImageConfig) (build.Kernel, error) {
 	}
 
 	if cfg.modules.isEmpty() {
-
+		k.Modules = build.NewDirectory(defaultKernelSt, "/lib/modules")
 	} else {
 		switch cfg.modules.scheme {
 		case "docker-image":

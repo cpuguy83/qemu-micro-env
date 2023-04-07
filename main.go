@@ -25,6 +25,8 @@ type config struct {
 	ImageRef    string
 	Prune       bool
 	CacheSpec   string
+	Tag         string
+	Push        bool
 }
 
 type logFormatter struct {
