@@ -35,18 +35,12 @@ func buildFlags(set *flag.FlagSet, cfg *config) {
 	set.BoolVar(&cfg.Push, "push", false, "Push the produced image")
 }
 
-func checkMergeOp(ctx context.Context, client *bkclient.Client) {
-	_, err := client.Build(ctx, bkclient.SolveOpt{}, "", func(ctx context.Context, client gateway.Client) (*gateway.Result, error) {
-		capset := client.BuildOpts().Caps
-		err := capset.Supports(pb.CapMergeOp)
-		if !build.UseMergeOp {
-			logrus.WithError(err).Info("Disabling MergeOp support due to error")
-		}
-		return &gateway.Result{}, nil
-	}, nil)
+func checkMergeOp(ctx context.Context, client gateway.Client) {
+	capset := client.BuildOpts().LLBCaps
+	err := capset.Supports(pb.CapMergeOp)
 	if err != nil {
-		logrus.WithError(err).Warn("Error checking for MergeOp support, disabling")
 		build.UseMergeOp = false
+		logrus.WithError(err).Info("Disabling MergeOp support due to error")
 	}
 }
 
@@ -58,23 +52,6 @@ func doBuilder(ctx context.Context, cfg config, tr transport.Doer) (string, erro
 		return "", err
 	}
 	defer client.Close()
-
-	checkMergeOp(ctx, client)
-
-	spec, err := specFromFlags(ctx, cfg.ImageConfig)
-	if err != nil {
-		return "", err
-	}
-
-	img, err := mkImage(ctx, spec)
-	if err != nil {
-		return "", fmt.Errorf("error building image LLB: %w", err)
-	}
-
-	def, err := img.Marshal(ctx)
-	if err != nil {
-		return "", fmt.Errorf("error marshaling LLB: %w", err)
-	}
 
 	ref := identity.NewID()
 
@@ -124,13 +101,14 @@ func doBuilder(ctx context.Context, cfg config, tr transport.Doer) (string, erro
 				exports[0].Attrs["push"] = "true"
 			}
 		}
-		res, err = client.Solve(ctx, def, bkclient.SolveOpt{
+
+		res, err = client.Build(ctx, bkclient.SolveOpt{
 			Exports:      exports,
 			Ref:          ref,
 			CacheExports: cacheOpts,
 			CacheImports: cacheOpts,
 			LocalDirs:    getLocalContexts(cfg),
-		}, ch)
+		}, "", gatewayBuildFunc(cfg), ch)
 		if err != nil {
 			return fmt.Errorf("error solving: %w", err)
 		}
@@ -162,4 +140,33 @@ func doBuilder(ctx context.Context, cfg config, tr transport.Doer) (string, erro
 		return "", fmt.Errorf("no image digest returned")
 	}
 	return dgst, nil
+}
+
+func gatewayBuildFunc(cfg config) gateway.BuildFunc {
+	return func(ctx context.Context, client gateway.Client) (*gateway.Result, error) {
+		checkMergeOp(ctx, client)
+
+		spec, err := specFromFlags(ctx, cfg.ImageConfig)
+		if err != nil {
+			return nil, err
+		}
+
+		img, err := mkImage(ctx, spec)
+		if err != nil {
+			return nil, fmt.Errorf("error building image LLB: %w", err)
+		}
+
+		def, err := img.Marshal(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling LLB: %w", err)
+		}
+
+		res, err := client.Solve(ctx, gateway.SolveRequest{
+			Definition: def.ToPB(),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("error solving: %w", err)
+		}
+		return res, nil
+	}
 }
