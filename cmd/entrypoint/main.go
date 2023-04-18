@@ -8,9 +8,11 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 
 	nested "github.com/antonfisher/nested-logrus-formatter"
 	"github.com/cpuguy83/qemu-micro-env/build/vmconfig"
+	"github.com/moby/sys/signal"
 	"github.com/sirupsen/logrus"
 )
 
@@ -182,6 +184,9 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Pdeathsig: syscall.SIGKILL,
+	}
 
 	var sshPort string
 	// For some reason qemu user mode networking doesn't work with docker port forwarding (connections just hang).
@@ -202,5 +207,21 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 		}
 	}()
 
-	return cmd.Run()
+	sigCh := make(chan os.Signal, 1)
+	signal.CatchAll(sigCh)
+	defer signal.StopCatch(sigCh)
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("error starting qemu: %w", err)
+	}
+
+	go func() {
+		for sig := range sigCh {
+			if err := cmd.Process.Signal(sig); err != nil {
+				logrus.WithError(err).Warn("Failed to forward signal to qemu")
+			}
+		}
+	}()
+
+	return cmd.Wait()
 }
