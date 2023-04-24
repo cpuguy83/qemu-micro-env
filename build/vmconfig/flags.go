@@ -22,3 +22,14 @@ func (f *intListFlag) Set(s string) error {
 	}
 	return nil
 }
+
+type socketListFlag []string
+
+func (f *socketListFlag) String() string {
+	return fmt.Sprint(*f)
+}
+
+func (f *socketListFlag) Set(s string) error {
+	*f = append(*f, strings.Split(s, ",")...)
+	return nil
+}
