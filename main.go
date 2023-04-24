@@ -62,6 +62,10 @@ func do(ctx context.Context) error {
 
 	flag.Parse()
 
+	if len(cfg.VM.SocketForwards) == 0 {
+		cfg.VM.SocketForwards.Set("/run/docker.sock")
+	}
+
 	if cfg.Debug {
 		logrus.SetLevel(logrus.DebugLevel)
 	}
@@ -105,6 +109,10 @@ func do(ctx context.Context) error {
 
 		if err := set.Parse(args); err != nil {
 			return err
+		}
+
+		if len(cfg.VM.SocketForwards) == 0 {
+			cfg.VM.SocketForwards.Set("/run/docker.sock")
 		}
 
 		if cfg.Debug {

@@ -201,7 +201,7 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 	}
 
 	go func() {
-		if err := doSSH(ctx, "/tmp/sockets", sshPort, cfg.Uid, cfg.Gid); err != nil {
+		if err := doSSH(ctx, "/tmp/sockets", sshPort, cfg.Uid, cfg.Gid, cfg.SocketForwards); err != nil {
 			logrus.WithError(err).Error("ssh failed")
 			cancel()
 		}
