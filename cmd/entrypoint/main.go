@@ -54,11 +54,6 @@ func doExec(ctx context.Context, args []string) error {
 }
 
 func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
-	var (
-		kvmOpts     []string
-		microvmOpts string
-	)
-
 	if !cfg.NoKVM {
 		cfg.NoKVM = !vmconfig.CanUseHostCPU(cfg.CPUArch)
 	}
@@ -66,26 +61,40 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 		return fmt.Errorf("kvm is required by user but not available on this system for arch %s", cfg.CPUArch)
 	}
 
-	if !cfg.NoKVM {
-		kvmOpts = []string{"-enable-kvm", "-cpu", "host"}
-		microvmOpts = ",x-option-roms=off,isa-serial=off,rtc=off"
-	}
-
-	var (
-		deviceSuffix string
-		machineType  []string
-	)
-
 	if cfg.UseVsock {
 		// microvm is incompatible with vsock as vsock requires a pci device
 		cfg.NoMicro = true
 	}
 
 	if !cfg.NoMicro {
+		out, err := exec.Command("qemu-system-"+cfg.CPUArch, "-M", "help").CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("error getting machine types: %w: %s", err, string(out))
+		}
+
+		if !strings.Contains(string(out), "microvm") {
+			logrus.Debug("Qemu machine type 'microvm' not supported on this system, falling back to 'virt'")
+			cfg.NoMicro = true
+		}
+	}
+
+	var (
+		deviceSuffix string
+		machineType  []string
+		kvmOpts      []string
+		microvmOpts  string
+	)
+
+	if !cfg.NoKVM {
+		kvmOpts = []string{"-enable-kvm", "-cpu", "host"}
+		microvmOpts = ",x-option-roms=off,isa-serial=off,rtc=off"
+	}
+
+	if cfg.NoMicro {
+		machineType = []string{"-M", "virt"}
+	} else {
 		deviceSuffix = "-device"
 		machineType = []string{"-M", "microvm" + microvmOpts}
-	} else if cfg.NoKVM && cfg.CPUArch != "x86_64" {
-		machineType = []string{"-M", "virt"}
 	}
 
 	device := func(name string, opts ...string) string {
