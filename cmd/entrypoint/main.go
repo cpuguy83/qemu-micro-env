@@ -90,9 +90,12 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 		microvmOpts = ",x-option-roms=off,isa-serial=off,rtc=off"
 	}
 
+	var console string
 	if cfg.NoMicro {
 		machineType = []string{"-M", "virt"}
+		console = "console=ttyS0"
 	} else {
+		console = "console=hvc0"
 		deviceSuffix = "-device"
 		machineType = []string{"-M", "microvm" + microvmOpts}
 	}
@@ -117,7 +120,7 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 
 	quiet := " quiet "
 	if logrus.GetLevel() >= logrus.DebugLevel {
-		quiet = "earlyprintk=ttyS0"
+		quiet = " earlyprintk=ttyS0 "
 		debugArg += " --debug "
 	}
 
@@ -140,7 +143,7 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 
 		"-kernel", "/boot/vmlinuz",
 		"-initrd", "/boot/initrd.img",
-		"-append", "console=hvc0 root=/dev/vda rw acpi=off reboot=t panic=-1 ip=dhcp " + quiet + "init=/sbin/init - --cgroup-version " + strconv.Itoa(cfg.CgroupVersion) + debugArg + vsockArg + " " + cfg.InitCmd,
+		"-append", console + " root=/dev/vda rw acpi=off reboot=t panic=-1 ip=dhcp " + quiet + "init=/sbin/init - --cgroup-version " + strconv.Itoa(cfg.CgroupVersion) + debugArg + vsockArg + " " + cfg.InitCmd,
 
 		// pass through the host's rng device to the guest
 		"-object", "rng-random,id=rng0,filename=/dev/urandom",
