@@ -94,6 +94,7 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 		"panic=-1",
 		"ip=dhcp",
 		"init=/sbin/init",
+		"console=hvc0",
 	}
 
 	if cfg.DebugConsole {
@@ -114,11 +115,9 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 
 	if cfg.NoMicro {
 		machineType = "virt"
-		kernelArgs = append(kernelArgs, "console=ttyS0")
 	} else {
 		disableACPI = "-no-acpi"
 		kernelArgs = append(kernelArgs, "acpi=off")
-		kernelArgs = append(kernelArgs, "console=hvc0")
 		deviceSuffix = "-device"
 		machineType = "microvm" + microvmOpts
 	}
