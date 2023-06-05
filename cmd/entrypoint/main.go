@@ -94,7 +94,7 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 		"panic=-1",
 		"ip=dhcp",
 		"init=/sbin/init",
-		"console=hvc0",
+		// "console=hvc0",
 	}
 
 	if cfg.DebugConsole {
