@@ -23,6 +23,17 @@ func (f *intListFlag) Set(s string) error {
 	return nil
 }
 
+type stringListFlag []string
+
+func (f *stringListFlag) String() string {
+	return fmt.Sprint(*f)
+}
+
+func (f *stringListFlag) Set(s string) error {
+	*f = append(*f, s)
+	return nil
+}
+
 type socketListFlag []string
 
 func (f *socketListFlag) String() string {

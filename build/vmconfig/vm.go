@@ -58,6 +58,7 @@ type VMConfig struct {
 	// Keeping for now as fully removing means trashing code that may still be useful.
 	UseVsock       bool
 	SocketForwards socketListFlag
+	QemuExtraArgs  stringListFlag
 }
 
 func (c VMConfig) AsFlags() []string {
@@ -80,6 +81,9 @@ func (c VMConfig) AsFlags() []string {
 	if len(c.SocketForwards) > 0 {
 		flags = append(flags, "--vm-socket-forward="+strings.Join(c.SocketForwards, ","))
 	}
+	for _, arg := range c.QemuExtraArgs {
+		flags = append(flags, "--qemu-extra-args="+arg)
+	}
 	return flags
 }
 
@@ -100,6 +104,7 @@ func AddVMFlags(set *flag.FlagSet, cfg *VMConfig) {
 	set.BoolVar(&cfg.RequireKVM, "require-kvm", false, "require KVM to be available (will fail if not available)")
 	set.StringVar(&cfg.InitCmd, "init-cmd", "/usr/local/bin/dockerd-init", "command to run in the VM (after pid 1)")
 	set.Var(&cfg.SocketForwards, "vm-socket-forward", "socket forwards to set up from the VM (--vm-socket-foroward=<guest path>)")
+	set.Var(&cfg.QemuExtraArgs, "qemu-extra-args", "set extra args to pass to qemu: note, you may break things if you don't know what you're doing")
 }
 
 var vmxRegexp = regexp.MustCompile(`flags.*:.*(vmx|svm)`)

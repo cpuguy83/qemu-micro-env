@@ -172,6 +172,8 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 		args = append(args, disableACPI)
 	}
 
+	args = append(args, cfg.QemuExtraArgs...)
+
 	netAddr := "user,id=net0,net=192.168.76.0/24,dhcpstart=192.168.76.9"
 	var localPorts []int
 	if len(cfg.PortForwards) > 0 {
