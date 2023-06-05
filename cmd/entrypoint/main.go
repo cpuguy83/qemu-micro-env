@@ -80,24 +80,47 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 
 	var (
 		deviceSuffix string
-		machineType  []string
+		machineType  string
 		kvmOpts      []string
 		microvmOpts  string
+		disableACPI  string
+		debugArg     string
 	)
+
+	kernelArgs := []string{
+		"root=/dev/vda",
+		"rw",
+		"reboot=t",
+		"panic=-1",
+		"ip=dhcp",
+		"init=/sbin/init",
+	}
+
+	if cfg.DebugConsole {
+		debugArg = " --debug-console "
+	}
+
+	if logrus.GetLevel() >= logrus.DebugLevel {
+		kernelArgs = append(kernelArgs, "earlyprintk=ttyS0")
+		debugArg += " --debug "
+	} else {
+		kernelArgs = append(kernelArgs, "quiet")
+	}
 
 	if !cfg.NoKVM {
 		kvmOpts = []string{"-enable-kvm", "-cpu", "host"}
 		microvmOpts = ",x-option-roms=off,isa-serial=off,rtc=off"
 	}
 
-	var console string
 	if cfg.NoMicro {
-		machineType = []string{"-M", "virt"}
-		console = "console=ttyS0"
+		machineType = "virt"
+		kernelArgs = append(kernelArgs, "console=ttyS0")
 	} else {
-		console = "console=hvc0"
+		disableACPI = "-no-acpi"
+		kernelArgs = append(kernelArgs, "acpi=off")
+		kernelArgs = append(kernelArgs, "console=hvc0")
 		deviceSuffix = "-device"
-		machineType = []string{"-M", "microvm" + microvmOpts}
+		machineType = "microvm" + microvmOpts
 	}
 
 	device := func(name string, opts ...string) string {
@@ -108,49 +131,47 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 		return out
 	}
 
-	var debugArg string
-	if cfg.DebugConsole {
-		debugArg = " --debug-console "
-	}
-
 	var vsockArg string
 	if cfg.UseVsock {
 		vsockArg = " --vsock "
 	}
 
-	quiet := " quiet "
-	if logrus.GetLevel() >= logrus.DebugLevel {
-		quiet = " earlyprintk=ttyS0 "
-		debugArg += " --debug "
+	initArgs := []string{
+		"--cgroup-version", strconv.Itoa(cfg.CgroupVersion),
+		debugArg,
+		vsockArg,
+		cfg.InitCmd,
 	}
+
+	kernelArgs = append(kernelArgs, append([]string{"-"}, initArgs...)...)
 
 	args := []string{
 		"/usr/bin/qemu-system-" + cfg.CPUArch,
 		"-m", cfg.Memory,
 		"-smp", strconv.Itoa(cfg.NumCPU),
 		"-no-reboot",
-		"-no-acpi",
 		"-nodefaults",
 		"-no-user-config",
 		"-nographic",
-
 		"-device", device("virtio-serial"),
 		"-chardev", "stdio,id=virtiocon0",
 		"-device", "virtconsole,chardev=virtiocon0",
-
+		"-M", machineType,
 		"-drive", "id=root,file=/tmp/rootfs.qcow2,format=qcow2,if=none",
 		"-device", device("virtio-blk", "drive=root"),
 
 		"-kernel", "/boot/vmlinuz",
 		"-initrd", "/boot/initrd.img",
-		"-append", console + " root=/dev/vda rw acpi=off reboot=t panic=-1 ip=dhcp " + quiet + "init=/sbin/init - --cgroup-version " + strconv.Itoa(cfg.CgroupVersion) + debugArg + vsockArg + " " + cfg.InitCmd,
 
 		// pass through the host's rng device to the guest
 		"-object", "rng-random,id=rng0,filename=/dev/urandom",
 		"-device", device("virtio-rng", "rng=rng0"),
+		"-append", strings.Join(kernelArgs, " "),
 	}
 
-	args = append(args, machineType...)
+	if disableACPI != "" {
+		args = append(args, disableACPI)
+	}
 
 	netAddr := "user,id=net0,net=192.168.76.0/24,dhcpstart=192.168.76.9"
 	var localPorts []int
