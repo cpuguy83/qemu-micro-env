@@ -90,7 +90,7 @@ func specFromFlags(ctx context.Context, cfg vmImageConfig) (*build.DiskImageSpec
 var defaultKernelSt = build.JammyRootfs().Run(
 	llb.AddEnv("DEBIAN_FRONTEND", "noninteractive"),
 	llb.Args([]string{
-		"/bin/sh", "-c", "apt-get update && apt-get install -y linux-image-kvm",
+		"/bin/sh", "-c", "apt-get update && apt-get install -y linux-virtual",
 	}),
 ).Root()
 
