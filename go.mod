@@ -11,11 +11,13 @@ require (
 	github.com/cpuguy83/pipes v0.1.1
 	github.com/creack/pty v1.1.18
 	github.com/docker/go-units v0.5.0
+	github.com/insomniacslk/dhcp v0.0.0-20230516061539-49801966e6cb
 	github.com/moby/buildkit v0.11.5
 	github.com/moby/sys/signal v0.7.0
 	github.com/moby/term v0.0.0-20221205130635-1aeaba878587
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/sirupsen/logrus v1.9.0
+	github.com/vishvananda/netlink v1.2.1-beta.2
 	golang.org/x/crypto v0.7.0
 	golang.org/x/sync v0.1.0
 	golang.org/x/sys v0.7.0
@@ -39,10 +41,16 @@ require (
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.15.2 // indirect
+	github.com/josharian/native v1.1.0 // indirect
+	github.com/mdlayher/packet v1.1.1 // indirect
+	github.com/mdlayher/socket v0.4.0 // indirect
 	github.com/moby/patternmatcher v0.5.0 // indirect
 	github.com/opencontainers/image-spec v1.1.0-rc2.0.20221005185240-3a7f492d3f1b // indirect
+	github.com/pierrec/lz4/v4 v4.1.14 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/tonistiigi/fsutil v0.0.0-20230214225802-a3696a2f1f27 // indirect
+	github.com/u-root/uio v0.0.0-20230220225925-ffce2a382923 // indirect
+	github.com/vishvananda/netns v0.0.0-20210104183010-2eb08e3e575f // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.40.0 // indirect
 	go.opentelemetry.io/otel v1.14.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.14.0 // indirect
