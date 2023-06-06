@@ -147,6 +147,10 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 		"-device", device("virtio-rng", "rng=rng0"),
 	}
 
+	if cfg.CPUArch == "aarch64" {
+		args = append(args, []string{"-cpu", "cortex-a57"}...)
+	}
+
 	args = append(args, machineType...)
 
 	netAddr := "user,id=net0,net=192.168.76.0/24,dhcpstart=192.168.76.9"
