@@ -63,6 +63,7 @@ func doRunner(ctx context.Context, cfg config, tr transport.Doer) error {
 	}
 
 	needsTTY := term.IsTerminal(os.Stdin.Fd())
+
 	c, err := docker.ContainerService().Create(ctx, cfg.ImageRef, func(cfg *container.CreateConfig) {
 		cfg.Spec.OpenStdin = true
 		cfg.Spec.AttachStdin = true
@@ -113,11 +114,14 @@ func doRunner(ctx context.Context, cfg config, tr transport.Doer) error {
 		}
 
 		if !noKVM {
-			cfg.Spec.HostConfig.Devices = append(cfg.Spec.HostConfig.Devices, containerapi.DeviceMapping{
-				PathOnHost:        "/dev/kvm",
-				PathInContainer:   "/dev/kvm",
-				CgroupPermissions: "rwm",
-			})
+			_, err := os.Stat("/dev/kvm")
+			if err == nil {
+				cfg.Spec.HostConfig.Devices = append(cfg.Spec.HostConfig.Devices, containerapi.DeviceMapping{
+					PathOnHost:        "/dev/kvm",
+					PathInContainer:   "/dev/kvm",
+					CgroupPermissions: "rwm",
+				})
+			}
 		}
 
 		cfg.Spec.HostConfig.Devices = append(cfg.Spec.HostConfig.Devices, containerapi.DeviceMapping{
