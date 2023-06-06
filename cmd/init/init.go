@@ -118,6 +118,10 @@ func main() {
 		args = flag.Args()[1:]
 	}
 
+	if err := setupNetwork(); err != nil {
+		panic(err)
+	}
+
 	cmd := exec.Command(exe, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stdin = os.Stdin
@@ -140,37 +144,6 @@ func main() {
 	if err := cmd.Run(); err != nil {
 		panic(err)
 	}
-}
-
-func setupNetwork() {
-	// ls, err := netlink.LinkList()
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	// ip, cidr, err := net.ParseCIDR(ipAddr)
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	// for _, l := range ls {
-	// 	if err := netlink.LinkSetUp(l); err != nil {
-	// 		panic(err)
-	// 	}
-
-	// 	if l.Attrs().Name != "eth0" {
-	// 		continue
-	// 	}
-
-	// 	if err := netlink.AddrAdd(l, &netlink.Addr{
-	// 		IPNet: &net.IPNet{
-	// 			IP:   ip,
-	// 			Mask: cidr.Mask,
-	// 		},
-	// 	}); err != nil {
-	// 		panic(err)
-	// 	}
-	// }
 }
 
 func mountCgroupV1() {
