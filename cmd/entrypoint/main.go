@@ -117,7 +117,7 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 
 	quiet := " quiet "
 	if logrus.GetLevel() >= logrus.DebugLevel {
-		quiet = "earlyprintk=ttyS0"
+		quiet = " earlyprintk=ttyS0 "
 		debugArg += " --debug "
 	}
 
