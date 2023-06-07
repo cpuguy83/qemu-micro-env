@@ -100,6 +100,10 @@ func main() {
 		pty.Close()
 	}
 
+	if err := initializeDevRan(); err != nil {
+		panic(err)
+	}
+
 	cgVer := *cgVerP
 	logrus.WithField("cgroup version", cgVer).Info("starting init")
 	switch cgVer {
@@ -267,5 +271,27 @@ func setupSSHKeys(pipe string) error {
 		return fmt.Errorf("error writing authorized_keys: %w", err)
 	}
 	logrus.Info("wrote authorized_keys")
+	return nil
+}
+
+func initializeDevRan() error {
+	if _, err := os.Stat("/dev/random"); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		logrus.Debug("creating /dev/random")
+		if err := unix.Mknod("/dev/random", unix.S_IFCHR|0444, int(unix.Mkdev(1, 8))); err != nil {
+			panic(err)
+		}
+	}
+	if _, err := os.Stat("/dev/urandom"); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		logrus.Debug("creating /dev/urandom")
+		if err := unix.Mknod("/dev/urandom", unix.S_IFCHR|0444, int(unix.Mkdev(1, 9))); err != nil {
+			panic(err)
+		}
+	}
 	return nil
 }
