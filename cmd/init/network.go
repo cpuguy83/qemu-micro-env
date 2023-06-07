@@ -16,7 +16,12 @@ const ifaceName = "eth0"
 func setupNetwork() error {
 	link, err := netlink.LinkByName(ifaceName)
 	if err != nil {
-		return fmt.Errorf("error getting link %q: %w", ifaceName, err)
+		ls, _ := net.Interfaces()
+		ifaces := make([]string, 0, len(ls))
+		for _, l := range ls {
+			ifaces = append(ifaces, l.Name)
+		}
+		return fmt.Errorf("error getting link %q: %w: interfaces: %s", ifaceName, err, strings.Join(ifaces, ", "))
 	}
 	if err := netlink.LinkSetUp(link); err != nil {
 		return fmt.Errorf("error setting link %q to up state: %w", ifaceName, err)
