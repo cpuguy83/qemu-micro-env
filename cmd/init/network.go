@@ -15,6 +15,11 @@ import (
 const l0 = "lo"
 
 func setupNetwork() error {
+	// The dhcp client uses getrandom(2) to generate a transaction id for the dhcp lease.
+	// This can hang, so set UROOT_NOHWRNG so that it uses /dev/urandom
+	// This is totally sufficient for our cases which is getting dhcp from qemu.
+	os.Setenv("UROOT_NOHWRNG", "1")
+
 	links, err := netlink.LinkList()
 	if err != nil {
 		return fmt.Errorf("error getting link list: %w", err)
