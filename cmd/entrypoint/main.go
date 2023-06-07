@@ -148,7 +148,7 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 	}
 
 	if cfg.CPUArch == "aarch64" {
-		args = append(args, []string{"-cpu", "cortex-a57"}...)
+		args = append(args, []string{"-cpu", "cortex-a57", "-machine", "secure=on,virtualization=on"}...)
 	}
 
 	args = append(args, machineType...)
