@@ -275,6 +275,7 @@ func setupSSHKeys(pipe string) error {
 }
 
 func initializeDevRan() error {
+	os.Setenv("UROOT_NOHWRNG", "1")
 	if _, err := os.Stat("/dev/random"); err != nil {
 		if !os.IsNotExist(err) {
 			return err
