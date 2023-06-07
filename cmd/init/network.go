@@ -12,7 +12,7 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
-const l0 = "l0"
+const l0 = "lo"
 
 func setupNetwork() error {
 	links, err := netlink.LinkList()

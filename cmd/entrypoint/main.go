@@ -147,7 +147,7 @@ func execVM(ctx context.Context, cfg vmconfig.VMConfig) error {
 		"-device", device("virtio-rng", "rng=rng0"),
 	}
 
-	if cfg.CPUArch == "aarch64" {
+	if cfg.NoMicro && cfg.CPUArch == "aarch64" {
 		args = append(args, []string{"-cpu", "cortex-a57", "-machine", "secure=on,virtualization=on"}...)
 	}
 
